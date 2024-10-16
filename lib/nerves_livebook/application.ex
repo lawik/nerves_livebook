@@ -93,10 +93,13 @@ defmodule NervesLivebook.Application do
     defp add_mix_install(), do: :ok
   end
 
-  if Mix.target() == :host do
-    defp target_children(_), do: []
-  else
-    defp target_children(:srhub), do: [NervesLivebook.WiFiMonitor]
-    defp target_children(_), do: []
-  end
+    defp target_children(_) do
+      config = Application.get_env(:livebook, LivebookWeb.Endpoint)
+      host = config[:url][:host]
+      port = config[:http][:port]
+
+      [
+        {Kiosk, dir: "/data", starting_page: "http://localhost:#{port}"}
+      ]
+    end
 end

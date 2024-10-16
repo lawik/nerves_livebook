@@ -5,7 +5,7 @@ defmodule NervesLivebook.MixProject do
   @version "0.14.0"
   @source_url "https://github.com/nerves-livebook/nerves_livebook"
 
-  @rpi_targets [:rpi, :rpi0, :rpi2, :rpi3, :rpi3a, :rpi4, :rpi0_2, :rpi5]
+  @rpi_targets [:rpi, :rpi0, :rpi2, :rpi3, :rpi3a, :rpi4, :rpi0_2, :rpi5, :frio_rpi4]
   @all_targets @rpi_targets ++
                  [:bbb, :osd32mp1, :x86_64, :npi_imx6ull, :grisp2, :mangopi_mq_pro]
 
@@ -112,20 +112,8 @@ defmodule NervesLivebook.MixProject do
       {:vintage_net_qmi, "~> 0.4.1", targets: @all_targets},
 
       # Nerves system dependencies
-      {:nerves_system_rpi, "~> 1.28", runtime: false, targets: :rpi},
-      {:nerves_system_rpi0, "~> 1.28", runtime: false, targets: :rpi0},
-      {:nerves_system_rpi0_2, "~> 1.28", runtime: false, targets: :rpi0_2},
-      {:nerves_system_rpi2, "~> 1.28", runtime: false, targets: :rpi2},
-      {:nerves_system_rpi3, "~> 1.28", runtime: false, targets: :rpi3},
-      {:nerves_system_rpi3a, "~> 1.28", runtime: false, targets: :rpi3a},
-      {:nerves_system_rpi4, "~> 1.28", runtime: false, targets: :rpi4},
-      {:nerves_system_rpi5, "~> 0.3", runtime: false, targets: :rpi5},
-      {:nerves_system_bbb, "~> 2.24", runtime: false, targets: :bbb},
-      {:nerves_system_osd32mp1, "~> 0.19", runtime: false, targets: :osd32mp1},
-      {:nerves_system_x86_64, "~> 1.28", runtime: false, targets: :x86_64},
-      {:nerves_system_npi_imx6ull, "~> 0.16", runtime: false, targets: :npi_imx6ull},
-      {:nerves_system_grisp2, "~> 0.12", runtime: false, targets: :grisp2},
-      {:nerves_system_mangopi_mq_pro, "~> 0.10", runtime: false, targets: :mangopi_mq_pro},
+      {:frio_rpi4, path: "../nerves_systems/src/frio_rpi4", runtime: false, targets: :frio_rpi4},
+
 
       # Compile-time only
       {:credo, "~> 1.6", only: :dev, runtime: false},
