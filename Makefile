@@ -27,6 +27,8 @@ BUILD  = $(MIX_APP_PATH)/obj
 
 NIF = $(PREFIX)/cryptoauthlib_nif.so
 
+#LDFLAGS += -lcryptoauth
+
 CFLAGS ?= -O2 -Wall -Wextra -Wno-unused-parameter -pedantic
 
 # Check that we're on a supported build platform
