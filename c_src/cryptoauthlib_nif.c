@@ -6,6 +6,7 @@
 #include <stdbool.h>
 
 // CryptoAuthLib headers
+#include "cryptoauthlib.h"
 #include "atca_basic.h"
 #include "atca_device.h"
 #include "atca_iface.h"

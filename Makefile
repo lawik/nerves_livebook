@@ -21,13 +21,20 @@
 # ERL_EI_LIBDIR path to libei.a (Required for crosscompile)
 # LDFLAGS	linker flags for linking all binaries
 # ERL_LDFLAGS	additional linker flags for projects referencing Erlang libraries
+#
+# Requirements:
+# - libcryptoauth.so must be available on the target system
+# - cryptoauthlib headers must be available during compilation
 
 PREFIX = $(MIX_APP_PATH)/priv
 BUILD  = $(MIX_APP_PATH)/obj
 
 NIF = $(PREFIX)/cryptoauthlib_nif.so
 
-#LDFLAGS += -lcryptoauth
+LDFLAGS += -lcryptoauth
+
+# Add RPATH for runtime library search
+LDFLAGS += -Wl,-rpath,/usr/lib -Wl,-rpath,/usr/local/lib
 
 CFLAGS ?= -O2 -Wall -Wextra -Wno-unused-parameter -pedantic
 
@@ -52,6 +59,9 @@ ERL_LDFLAGS ?= -L$(ERL_EI_LIBDIR) -lei
 
 SRC = c_src/cryptoauthlib_nif.c
 HEADERS =$(wildcard c_src/*.h)
+CRYPTOAUTHLIB_DIR =$(wildcard $(NERVES_SYSTEM)/build/cryptoauthlib-*)/lib
+CRYPTOAUTHLIB_HEADERS = $(CRYPTOAUTHLIB_DIR)/cryptoauthlib.h $(CRYPTOAUTHLIB_DIR)/atca_basic.h $(CRYPTOAUTHLIB_DIR)/atca_device.h $(CRYPTOAUTHLIB_DIR)/atca_iface.h
+HEADERS += $(CRYPTOAUTHLIB_HEADERS)
 OBJ = $(SRC:c_src/%.c=$(BUILD)/%.o)
 
 calling_from_make:
@@ -65,7 +75,7 @@ $(OBJ): $(HEADERS) Makefile
 
 $(BUILD)/%.o: c_src/%.c
 	@echo " CC $(notdir $@)"
-	$(CC) -c $(ERL_CFLAGS) $(CFLAGS) -o $@ $<
+	$(CC) -I $(CRYPTOAUTHLIB_DIR) -lcryptoauthlib -c $(ERL_CFLAGS) $(CFLAGS) -o $@ $<
 
 $(NIF): $(OBJ)
 	@echo " LD $(notdir $@)"
