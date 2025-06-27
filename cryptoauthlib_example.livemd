@@ -1,0 +1,329 @@
+# Cryptoauthlib Example - Hardware Security with Nerves
+
+```elixir
+Mix.install([
+  {:nerves_livebook, path: "."}
+])
+```
+
+## Introduction
+
+This Livebook demonstrates how to use the Cryptoauthlib bindings to interact with Microchip cryptographic authentication devices like the ATECC608A. These devices provide hardware-based security features including:
+
+* Secure key storage
+* Hardware random number generation
+* ECDSA digital signatures
+* Tamper-resistant operations
+
+**Note**: This example uses scaffolding code. To work with real hardware, you'll need to complete the implementation by integrating the actual cryptoauthlib C library.
+
+## Device Setup and Configuration
+
+First, let's set up the device configuration. The most common setup uses I2C communication.
+
+```elixir
+alias NervesLivebook.Cryptoauthlib
+alias NervesLivebook.Cryptoauthlib.Config
+alias NervesLivebook.Cryptoauthlib.Utils
+
+# Create a device configuration for ATECC608A over I2C
+config = Config.default(:atecc608a)
+IO.inspect(config, label: "Default Configuration")
+```
+
+```elixir
+# You can also create custom configurations
+custom_config = Config.i2c(:atecc608a, 0x61, 
+  bus: 1, 
+  baud_rate: 400_000,
+  wake_delay: 1000
+)
+
+# Validate the configuration
+case Config.validate(custom_config) do
+  :ok -> IO.puts("✅ Configuration is valid")
+  {:error, reason} -> IO.puts("❌ Configuration error: #{reason}")
+end
+```
+
+## Device Information
+
+Let's examine what slots and capabilities are available on different device types:
+
+```elixir
+# Check slot information for different device types
+devices = [:atecc508a, :atecc608a, :atecc608b, :atsha204a, :atsha206a]
+
+for device_type <- devices do
+  slot_info = Config.slot_info(device_type)
+  IO.puts("\n#{String.upcase(to_string(device_type))}:")
+  IO.puts("  Total slots: #{slot_info.total_slots}")
+  IO.puts("  Key slots: #{inspect(slot_info.key_slots)}")
+  IO.puts("  Data slots: #{inspect(slot_info.data_slots)}")
+  IO.puts("  Slot size: #{slot_info.slot_size} bytes")
+end
+```
+
+## Basic Device Operations
+
+Now let's try to initialize and interact with a device. Since this is scaffolding code, these operations will return placeholder data or `:nif_not_loaded` errors.
+
+```elixir
+# Attempt to initialize the device
+case Cryptoauthlib.init() do
+  {:ok, device} ->
+    IO.puts("✅ Device initialized successfully!")
+    
+    # Get device information
+    case Cryptoauthlib.get_info(device) do
+      {:ok, info} ->
+        IO.puts("Device Info:")
+        IO.inspect(info)
+      {:error, reason} ->
+        IO.puts("Failed to get device info: #{reason}")
+    end
+    
+    # Clean up
+    Cryptoauthlib.release(device)
+    
+  {:error, :nif_not_loaded} ->
+    IO.puts("⚠️  NIF not loaded - this is expected with scaffolding code")
+    IO.puts("   To use real hardware, complete the cryptoauthlib integration")
+    
+  {:error, reason} ->
+    IO.puts("❌ Device initialization failed: #{reason}")
+end
+```
+
+## Cryptographic Operations Example
+
+Here's how you would perform cryptographic operations once the NIF is working:
+
+```elixir
+defmodule CryptoExample do
+  def demonstrate_crypto_workflow() do
+    case Cryptoauthlib.init() do
+      {:ok, device} ->
+        perform_crypto_operations(device)
+        Cryptoauthlib.release(device)
+        
+      {:error, :nif_not_loaded} ->
+        IO.puts("📝 Demonstrating crypto workflow (NIF not loaded)")
+        simulate_crypto_operations()
+        
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+  
+  defp perform_crypto_operations(device) do
+    IO.puts("🔐 Performing cryptographic operations...")
+    
+    # Generate random data
+    case Cryptoauthlib.random(device, 16) do
+      {:ok, random_data} ->
+        IO.puts("Generated random data: #{Utils.binary_to_hex(random_data)}")
+      {:error, reason} ->
+        IO.puts("Random generation failed: #{reason}")
+    end
+    
+    # Generate a key pair
+    slot = 0
+    case Cryptoauthlib.genkey(device, slot) do
+      {:ok, public_key} ->
+        IO.puts("Generated public key in slot #{slot}")
+        IO.puts("Public key: #{Utils.binary_to_hex(public_key)}")
+        
+        # Sign a message
+        message = "Hello, Cryptoauth World!"
+        digest = :crypto.hash(:sha256, message)
+        
+        case Cryptoauthlib.sign(device, slot, digest) do
+          {:ok, signature} ->
+            IO.puts("Message signed successfully")
+            IO.puts("Signature: #{Utils.binary_to_hex(signature)}")
+            
+            # Verify the signature
+            case Cryptoauthlib.verify(device, slot, digest, signature) do
+              {:ok, true} ->
+                IO.puts("✅ Signature verification successful!")
+              {:ok, false} ->
+                IO.puts("❌ Signature verification failed!")
+              {:error, reason} ->
+                IO.puts("Verification error: #{reason}")
+            end
+            
+          {:error, reason} ->
+            IO.puts("Signing failed: #{reason}")
+        end
+        
+      {:error, reason} ->
+        IO.puts("Key generation failed: #{reason}")
+    end
+  end
+  
+  defp simulate_crypto_operations() do
+    # Simulate what the operations would look like
+    mock_random = :crypto.strong_rand_bytes(16)
+    IO.puts("🎲 Mock random data: #{Utils.binary_to_hex(mock_random)}")
+    
+    # Generate a mock key pair using Erlang's crypto
+    {public_key, private_key} = :crypto.generate_key(:ecdh, :secp256r1)
+    IO.puts("🔑 Mock public key: #{Utils.binary_to_hex(public_key)}")
+    
+    # Sign a message
+    message = "Hello, Cryptoauth World!"
+    digest = :crypto.hash(:sha256, message)
+    signature = :crypto.sign(:ecdsa, :sha256, message, [private_key, :secp256r1])
+    
+    IO.puts("📝 Message: #{message}")
+    IO.puts("📋 Digest: #{Utils.binary_to_hex(digest)}")
+    IO.puts("✍️  Signature: #{Utils.binary_to_hex(signature)}")
+    
+    # Verify signature
+    case :crypto.verify(:ecdsa, :sha256, message, signature, [public_key, :secp256r1]) do
+      true -> IO.puts("✅ Mock signature verification successful!")
+      false -> IO.puts("❌ Mock signature verification failed!")
+    end
+  end
+end
+
+CryptoExample.demonstrate_crypto_workflow()
+```
+
+## Data Formatting Utilities
+
+The Utils module provides helpful functions for working with cryptographic data:
+
+```elixir
+# Example binary data
+binary_data = <<0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF>>
+
+# Convert to different hex formats
+IO.puts("Default hex: #{Utils.binary_to_hex(binary_data)}")
+IO.puts("Uppercase hex: #{Utils.binary_to_hex(binary_data, uppercase: true)}")
+IO.puts("With separators: #{Utils.binary_to_hex(binary_data, separator: ":")}")
+IO.puts("With prefix: #{Utils.binary_to_hex(binary_data, prefix: "0x", uppercase: true)}")
+```
+
+```elixir
+# Convert hex strings back to binary
+hex_string = "0123456789ABCDEF"
+binary = Utils.hex_to_binary(hex_string)
+IO.puts("Original: #{hex_string}")
+IO.puts("Binary: #{inspect(binary)}")
+IO.puts("Back to hex: #{Utils.binary_to_hex(binary, uppercase: true)}")
+
+# Handle hex strings with separators
+hex_with_colons = "01:23:45:67"
+binary_from_colons = Utils.hex_to_binary(hex_with_colons, separator: ":")
+IO.puts("With colons: #{hex_with_colons}")
+IO.puts("Binary: #{inspect(binary_from_colons)}")
+```
+
+## Certificate Signing Request Template
+
+Here's how you would prepare data for X.509 certificate generation:
+
+```elixir
+# Mock public key (in real usage, this would come from the device)
+mock_public_key = :crypto.strong_rand_bytes(64)
+
+# Subject information for the certificate
+subject = [
+  common_name: "iot-device-#{System.get_env("NERVES_SERIAL", "12345")}",
+  organization: "My IoT Company",
+  organizational_unit: "Engineering",
+  country: "US",
+  state: "California",
+  locality: "San Francisco"
+]
+
+case Utils.generate_csr_template(mock_public_key, subject) do
+  {:ok, template} ->
+    IO.puts("✅ CSR template generated successfully")
+    IO.inspect(template, label: "CSR Template")
+    
+  {:error, reason} ->
+    IO.puts("❌ CSR template generation failed: #{reason}")
+end
+```
+
+## Device Serial Number Calculation
+
+```elixir
+# Calculate serial number from device information
+device_info = %{
+  device_type: :atecc608a,
+  public_key: mock_public_key
+}
+
+case Utils.calculate_serial_number(device_info) do
+  {:ok, serial} ->
+    IO.puts("📟 Calculated device serial: #{serial}")
+  {:error, reason} ->
+    IO.puts("❌ Serial calculation failed: #{reason}")
+end
+```
+
+## Production Workflow Example
+
+Here's a typical workflow for provisioning devices in production:
+
+```elixir
+defmodule ProductionWorkflow do
+  def provision_device() do
+    IO.puts("🏭 Production Device Provisioning Workflow")
+    IO.puts("(This is a simulation - actual implementation would use real hardware)")
+    
+    steps = [
+      "1. Initialize device connection",
+      "2. Verify device is unlocked and ready for provisioning", 
+      "3. Write device configuration data",
+      "4. Generate device identity key pair",
+      "5. Create and store device certificate",
+      "6. Verify all provisioning data",
+      "7. Lock configuration zone (IRREVERSIBLE!)",
+      "8. Lock data zone (IRREVERSIBLE!)",
+      "9. Final verification and testing",
+      "10. Record device serial and certificate in database"
+    ]
+    
+    Enum.each(steps, fn step ->
+      IO.puts("   #{step}")
+      Process.sleep(500)  # Simulate processing time
+    end)
+    
+    IO.puts("\n✅ Device provisioning complete!")
+    IO.puts("⚠️  Remember: Locking is irreversible! Test thoroughly before production.")
+  end
+end
+
+ProductionWorkflow.provision_device()
+```
+
+## Next Steps
+
+To complete this implementation:
+
+1. **Install cryptoauthlib**: Download and build Microchip's cryptoauthlib C library
+2. **Update NIF code**: Replace placeholder C code with actual cryptoauthlib API calls
+3. **Hardware setup**: Connect your cryptoauth device via I2C, SPI, or UART
+4. **Device tree configuration**: Set up proper device tree overlays for communication
+5. **Testing**: Test with real hardware and various device configurations
+
+```elixir
+IO.puts("""
+🎯 Implementation Checklist:
+□ Download cryptoauthlib from GitHub
+□ Build and install cryptoauthlib library  
+□ Update c_src/cryptoauthlib_nif.c with real API calls
+□ Configure device tree for I2C/SPI communication
+□ Test with actual ATECC608A or similar device
+□ Implement error handling for all hardware scenarios
+□ Add production provisioning safeguards
+□ Create comprehensive test suite
+""")
+```
+
+This scaffolding provides a solid foundation for building secure IoT applications with hardware-based cryptography on Nerves!
