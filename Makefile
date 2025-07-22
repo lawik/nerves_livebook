@@ -59,8 +59,8 @@ ERL_LDFLAGS ?= -L$(ERL_EI_LIBDIR) -lei
 
 SRC = c_src/cryptoauthlib_nif.c
 HEADERS =$(wildcard c_src/*.h)
-CRYPTOAUTHLIB_DIR =$(wildcard $(NERVES_SYSTEM)/build/cryptoauthlib-*)/lib
-CRYPTOAUTHLIB_HEADERS = $(CRYPTOAUTHLIB_DIR)/cryptoauthlib.h $(CRYPTOAUTHLIB_DIR)/atca_basic.h $(CRYPTOAUTHLIB_DIR)/atca_device.h $(CRYPTOAUTHLIB_DIR)/atca_iface.h
+CRYPTOAUTHLIB_DIR =$(wildcard $(NERVES_SYSTEM)/staging/usr/include/cryptoauthlib)
+CRYPTOAUTHLIB_HEADERS = cryptoauthlib.h atca_basic.h atca_device.h atca_iface.h
 HEADERS += $(CRYPTOAUTHLIB_HEADERS)
 OBJ = $(SRC:c_src/%.c=$(BUILD)/%.o)
 
@@ -71,11 +71,11 @@ all: install
 
 install: $(PREFIX) $(BUILD) $(NIF)
 
-$(OBJ): $(HEADERS) Makefile
+#$(OBJ): $(HEADERS) Makefile
 
 $(BUILD)/%.o: c_src/%.c
 	@echo " CC $(notdir $@)"
-	$(CC) -I $(CRYPTOAUTHLIB_DIR) -lcryptoauthlib -c $(ERL_CFLAGS) $(CFLAGS) -o $@ $<
+	$(CC) -I$(CRYPTOAUTHLIB_DIR) -lcryptoauthlib -c $(ERL_CFLAGS) $(CFLAGS) -o $@ $<
 
 $(NIF): $(OBJ)
 	@echo " LD $(notdir $@)"

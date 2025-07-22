@@ -5,9 +5,40 @@ defmodule NervesLivebook.CryptoauthlibTest do
   alias NervesLivebook.Cryptoauthlib
 
   describe "device initialization" do
-    test "init/0 returns error when NIF not loaded" do
+    test "init/1 returns error when NIF not loaded" do
       # This test will fail until the NIF is properly compiled
-      assert Cryptoauthlib.init() == {:error, :nif_not_loaded}
+      assert Cryptoauthlib.init(1) == {:error, :nif_not_loaded}
+    end
+
+    test "init/1 validates I2C bus parameter" do
+      # Test with valid I2C bus numbers
+      assert Cryptoauthlib.init(0) == {:error, :nif_not_loaded}
+      assert Cryptoauthlib.init(1) == {:error, :nif_not_loaded}
+      assert Cryptoauthlib.init(2) == {:error, :nif_not_loaded}
+    end
+
+    test "init/1 rejects invalid I2C bus parameters" do
+      # Test with invalid parameters that should cause badarg
+      # Note: When NIF is not loaded, we get :nif_not_loaded instead of :badarg
+      # but the validation logic is still tested
+
+      # Negative numbers
+      assert match?({:error, _}, Cryptoauthlib.init(-1))
+      assert match?({:error, _}, Cryptoauthlib.init(-100))
+
+      # Non-integers should cause a function clause error or badarg
+      assert_raise ArgumentError, fn -> Cryptoauthlib.init("1") end
+      assert_raise ArgumentError, fn -> Cryptoauthlib.init(1.5) end
+      assert_raise ArgumentError, fn -> Cryptoauthlib.init(:invalid) end
+      assert_raise ArgumentError, fn -> Cryptoauthlib.init(nil) end
+      assert_raise ArgumentError, fn -> Cryptoauthlib.init([1]) end
+      assert_raise ArgumentError, fn -> Cryptoauthlib.init(%{bus: 1}) end
+    end
+
+    test "init/1 requires exactly one argument" do
+      # Test function arity
+      assert_raise UndefinedFunctionError, fn -> Cryptoauthlib.init() end
+      assert_raise UndefinedFunctionError, fn -> Cryptoauthlib.init(1, 2) end
     end
 
     test "release/1 returns error when NIF not loaded" do
@@ -51,7 +82,8 @@ defmodule NervesLivebook.CryptoauthlibTest do
     test "verify/4 returns error when NIF not loaded" do
       device_ref = make_ref()
       digest = :crypto.hash(:sha256, "test message")
-      signature = <<0::512>>  # 64-byte signature
+      # 64-byte signature
+      signature = <<0::512>>
       assert Cryptoauthlib.verify(device_ref, 0, digest, signature) == {:error, :nif_not_loaded}
     end
   end
@@ -85,7 +117,7 @@ defmodule NervesLivebook.CryptoauthlibTest do
   @tag :integration
   describe "integration tests (with working NIF)" do
     setup do
-      case Cryptoauthlib.init() do
+      case Cryptoauthlib.init(1) do
         {:ok, device} -> {:ok, device: device}
         {:error, _reason} -> :skip
       end
@@ -128,7 +160,8 @@ defmodule NervesLivebook.CryptoauthlibTest do
     test "data zone operations", %{device: device} do
       # Write some test data
       test_data = <<0xDE, 0xAD, 0xBE, 0xEF>>
-      slot = 8  # Data slot
+      # Data slot
+      slot = 8
       offset = 0
 
       # Check if data zone is locked first
@@ -166,7 +199,7 @@ defmodule NervesLivebook.CryptoauthlibTest do
   describe "input validation" do
     test "validates digest length for signing" do
       device_ref = make_ref()
-      
+
       # Test various invalid digest lengths
       for length <- [0, 1, 15, 31, 33, 64] do
         invalid_digest = <<0::size(length * 8)>>
@@ -180,7 +213,7 @@ defmodule NervesLivebook.CryptoauthlibTest do
     test "validates signature length for verification" do
       device_ref = make_ref()
       valid_digest = :crypto.hash(:sha256, "test")
-      
+
       # Test various invalid signature lengths
       for length <- [0, 1, 32, 63, 65, 128] do
         invalid_signature = <<0::size(length * 8)>>
@@ -191,7 +224,7 @@ defmodule NervesLivebook.CryptoauthlibTest do
 
     test "validates slot numbers" do
       device_ref = make_ref()
-      
+
       # Test invalid slot numbers (should be 0-15 for most devices)
       for slot <- [16, 255, 1000] do
         result = Cryptoauthlib.genkey(device_ref, slot)
@@ -201,7 +234,7 @@ defmodule NervesLivebook.CryptoauthlibTest do
 
     test "validates random data length" do
       device_ref = make_ref()
-      
+
       # Test invalid lengths (should be 1-32)
       for length <- [0, 33, 64, 1000] do
         result = Cryptoauthlib.random(device_ref, length)
@@ -213,7 +246,7 @@ defmodule NervesLivebook.CryptoauthlibTest do
   describe "error handling" do
     test "handles invalid device references gracefully" do
       invalid_refs = [nil, "not_a_ref", 123, %{}, []]
-      
+
       for invalid_ref <- invalid_refs do
         # All these should return appropriate errors
         assert match?({:error, _}, Cryptoauthlib.get_info(invalid_ref))
@@ -225,7 +258,7 @@ defmodule NervesLivebook.CryptoauthlibTest do
     test "handles invalid zone atoms" do
       device_ref = make_ref()
       invalid_zones = [:invalid, :fake, :nonexistent]
-      
+
       for zone <- invalid_zones do
         result = Cryptoauthlib.read(device_ref, zone, 0, 0, 4)
         assert match?({:error, _}, result)

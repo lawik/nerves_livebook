@@ -21,8 +21,8 @@ defmodule NervesLivebook.Cryptoauthlib do
   ## Usage
 
   ```elixir
-  # Initialize the device
-  {:ok, device} = NervesLivebook.Cryptoauthlib.init()
+  # Initialize the device on I2C bus 1
+  {:ok, device} = NervesLivebook.Cryptoauthlib.init(1)
 
   # Generate a random number
   {:ok, random_bytes} = NervesLivebook.Cryptoauthlib.random(device, 32)
@@ -46,17 +46,21 @@ defmodule NervesLivebook.Cryptoauthlib do
   end
 
   @doc """
-  Initialize the cryptoauth device.
+  Initialize the cryptoauth device on the specified I2C bus.
+
+  ## Parameters
+
+  * `i2c_bus` - I2C bus number to use for communication (e.g., 1, 2, etc.)
 
   Returns `{:ok, device_handle}` on success or `{:error, reason}` on failure.
 
   ## Examples
 
-      iex> NervesLivebook.Cryptoauthlib.init()
+      iex> NervesLivebook.Cryptoauthlib.init(1)
       {:ok, #Reference<0.123456789.0>}
 
   """
-  def init do
+  def init(_i2c_bus, _logger_pid) do
     :erlang.nif_error(:nif_not_loaded)
   end
 
@@ -69,7 +73,7 @@ defmodule NervesLivebook.Cryptoauthlib do
 
   ## Examples
 
-      iex> {:ok, device} = NervesLivebook.Cryptoauthlib.init()
+      iex> {:ok, device} = NervesLivebook.Cryptoauthlib.init(1)
       iex> NervesLivebook.Cryptoauthlib.release(device)
       :ok
 
@@ -89,7 +93,7 @@ defmodule NervesLivebook.Cryptoauthlib do
 
   ## Examples
 
-      iex> {:ok, device} = NervesLivebook.Cryptoauthlib.init()
+      iex> {:ok, device} = NervesLivebook.Cryptoauthlib.init(1)
       iex> NervesLivebook.Cryptoauthlib.get_info(device)
       {:ok, %{device_type: "ATECC608A", serial_number: <<...>>, ...}}
 
@@ -110,7 +114,7 @@ defmodule NervesLivebook.Cryptoauthlib do
 
   ## Examples
 
-      iex> {:ok, device} = NervesLivebook.Cryptoauthlib.init()
+      iex> {:ok, device} = NervesLivebook.Cryptoauthlib.init(1)
       iex> NervesLivebook.Cryptoauthlib.random(device, 16)
       {:ok, <<0x12, 0x34, 0x56, ...>>}
 
@@ -131,7 +135,7 @@ defmodule NervesLivebook.Cryptoauthlib do
 
   ## Examples
 
-      iex> {:ok, device} = NervesLivebook.Cryptoauthlib.init()
+      iex> {:ok, device} = NervesLivebook.Cryptoauthlib.init(1)
       iex> NervesLivebook.Cryptoauthlib.genkey(device, 0)
       {:ok, <<0x04, ...>>}  # 64-byte uncompressed public key
 
@@ -152,7 +156,7 @@ defmodule NervesLivebook.Cryptoauthlib do
 
   ## Examples
 
-      iex> {:ok, device} = NervesLivebook.Cryptoauthlib.init()
+      iex> {:ok, device} = NervesLivebook.Cryptoauthlib.init(1)
       iex> NervesLivebook.Cryptoauthlib.get_pubkey(device, 0)
       {:ok, <<0x04, ...>>}  # 64-byte uncompressed public key
 
@@ -174,7 +178,7 @@ defmodule NervesLivebook.Cryptoauthlib do
 
   ## Examples
 
-      iex> {:ok, device} = NervesLivebook.Cryptoauthlib.init()
+      iex> {:ok, device} = NervesLivebook.Cryptoauthlib.init(1)
       iex> digest = :crypto.hash(:sha256, "Hello, World!")
       iex> NervesLivebook.Cryptoauthlib.sign(device, 0, digest)
       {:ok, <<...>>}  # 64-byte signature
@@ -198,7 +202,7 @@ defmodule NervesLivebook.Cryptoauthlib do
 
   ## Examples
 
-      iex> {:ok, device} = NervesLivebook.Cryptoauthlib.init()
+      iex> {:ok, device} = NervesLivebook.Cryptoauthlib.init(1)
       iex> digest = :crypto.hash(:sha256, "Hello, World!")
       iex> {:ok, signature} = NervesLivebook.Cryptoauthlib.sign(device, 0, digest)
       iex> NervesLivebook.Cryptoauthlib.verify(device, 0, digest, signature)
@@ -224,7 +228,7 @@ defmodule NervesLivebook.Cryptoauthlib do
 
   ## Examples
 
-      iex> {:ok, device} = NervesLivebook.Cryptoauthlib.init()
+      iex> {:ok, device} = NervesLivebook.Cryptoauthlib.init(1)
       iex> NervesLivebook.Cryptoauthlib.read(device, :config, 0, 0, 4)
       {:ok, <<0x01, 0x23, 0x45, 0x67>>}
 
@@ -248,7 +252,7 @@ defmodule NervesLivebook.Cryptoauthlib do
 
   ## Examples
 
-      iex> {:ok, device} = NervesLivebook.Cryptoauthlib.init()
+      iex> {:ok, device} = NervesLivebook.Cryptoauthlib.init(1)
       iex> NervesLivebook.Cryptoauthlib.write(device, :data, 8, 0, <<1, 2, 3, 4>>)
       :ok
 
@@ -271,7 +275,7 @@ defmodule NervesLivebook.Cryptoauthlib do
 
   ## Examples
 
-      iex> {:ok, device} = NervesLivebook.Cryptoauthlib.init()
+      iex> {:ok, device} = NervesLivebook.Cryptoauthlib.init(1)
       iex> NervesLivebook.Cryptoauthlib.lock(device, :config)
       :ok
 
@@ -292,7 +296,7 @@ defmodule NervesLivebook.Cryptoauthlib do
 
   ## Examples
 
-      iex> {:ok, device} = NervesLivebook.Cryptoauthlib.init()
+      iex> {:ok, device} = NervesLivebook.Cryptoauthlib.init(1)
       iex> NervesLivebook.Cryptoauthlib.is_locked(device, :config)
       {:ok, false}
 

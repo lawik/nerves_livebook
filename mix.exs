@@ -208,7 +208,9 @@ defmodule NervesLivebook.MixProject do
           "TARGET_STRIP" => System.get_env("TARGET_STRIP") || "",
           "TARGET_AR" => System.get_env("TARGET_AR") || "",
           "NERVES_TOOLCHAIN_GCC" => System.get_env("NERVES_TOOLCHAIN_GCC") || "",
-          "CROSSCOMPILE" => "1"
+          "CROSSCOMPILE" => "1",
+          "CFLAGS" => System.get_env("CFLAGS") || "",
+          "LDFLAGS" => System.get_env("LDFLAGS") || ""
         }
     end
   end

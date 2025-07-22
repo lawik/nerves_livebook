@@ -17,7 +17,8 @@ defmodule NervesLivebook.Application do
 
     children =
       [
-        NervesLivebook.UI
+        NervesLivebook.UI,
+        NervesLivebook.Cryptoauthlib.Logger
       ] ++ target_children(Nerves.Runtime.mix_target())
 
     Supervisor.start_link(children, opts)

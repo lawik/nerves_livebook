@@ -6,10 +6,10 @@
 #include <stdbool.h>
 
 // CryptoAuthLib headers
-#include "cryptoauthlib.h"
-#include "atca_basic.h"
-#include "atca_device.h"
-#include "atca_iface.h"
+#include <cryptoauthlib/cryptoauthlib.h>
+#include <cryptoauthlib/atca_basic.h>
+#include <cryptoauthlib/atca_device.h>
+#include <cryptoauthlib/atca_iface.h>
 
 // Resource type for device handles
 static ErlNifResourceType* DEVICE_RESOURCE_TYPE;
@@ -18,6 +18,7 @@ static ErlNifResourceType* DEVICE_RESOURCE_TYPE;
 typedef struct {
     ATCADevice device;     // Actual cryptoauthlib device handle
     ATCAIfaceCfg cfg;      // Device configuration
+    ErlNifPid logger_pid;  // Logger process ID
     int is_initialized;
     char device_type[32];
 } device_resource_t;
@@ -50,10 +51,10 @@ static ERL_NIF_TERM atca_status_to_atom(ErlNifEnv* env, ATCA_STATUS status) {
             return atom_comm_fail;
         case ATCA_TIMEOUT:
             return atom_timeout;
-        case ATCA_DEVICE_NOT_FOUND:
+        case ATCA_BAD_OPCODE:
             return atom_device_not_found;
         default:
-            return atom_device_error;
+            return enif_make_tuple2(env, atom_device_error, enif_make_uint(env, status));
     }
 }
 
@@ -78,10 +79,34 @@ static void device_resource_dtor(ErlNifEnv* env, void* obj) {
     }
 }
 
+void send_log(ErlNifEnv* env, ErlNifPid pid, const char* message) {
+    ErlNifEnv* msg_env;
+    msg_env = enif_alloc_env();
+    enif_send(env, &pid, msg_env, enif_make_tuple2(env, enif_make_atom(env, "log"), enif_make_string(env, message, ERL_NIF_LATIN1)));
+    enif_free_env(env);
+    return;
+}
+
 // Initialize device
 static ERL_NIF_TERM cryptoauthlib_init(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
     device_resource_t* device;
     ERL_NIF_TERM device_term;
+    int i2c_bus;
+    ErlNifPid logger_pid;
+
+    // Check arguments
+    if (argc != 2) {
+        return make_error(env, atom_badarg);
+    }
+
+    // Extract I2C bus number
+    if (!enif_get_int(env, argv[0], &i2c_bus) || i2c_bus < 0) {
+        return make_error(env, atom_badarg);
+    }
+    // Extract logger PID
+    if (!enif_get_local_pid(env, argv[0], &logger_pid)) {
+        return make_error(env, atom_badarg);
+    }
 
     // Allocate device resource
     device = enif_alloc_resource(DEVICE_RESOURCE_TYPE, sizeof(device_resource_t));
@@ -94,15 +119,19 @@ static ERL_NIF_TERM cryptoauthlib_init(ErlNifEnv* env, int argc, const ERL_NIF_T
     device->is_initialized = 0;
     strcpy(device->device_type, "unknown");
 
-    // Set up default I2C configuration for ATECC608A
+    // Set up I2C configuration for ATECC608A with specified bus
     device->cfg.iface_type = ATCA_I2C_IFACE;
     device->cfg.devtype = ATECC608A;
-    device->cfg.atcai2c.slave_address = 0xC0;
-    device->cfg.atcai2c.bus = 1;
+    device->cfg.atcai2c.address = 0xC0;
+    device->cfg.atcai2c.bus = i2c_bus;
     device->cfg.atcai2c.baud = 400000;
     device->cfg.wake_delay = 1500;
     device->cfg.rx_retries = 20;
+    device->logger_pid = logger_pid;
 
+    char msg[128];
+    sprintf(msg, "Initializing device: %d", i2c_bus);
+    send_log(env, logger_pid, msg);
     // Initialize actual cryptoauthlib device
     ATCA_STATUS status = atcab_init(&device->cfg);
     if (status != ATCA_SUCCESS) {
@@ -117,6 +146,7 @@ static ERL_NIF_TERM cryptoauthlib_init(ErlNifEnv* env, int argc, const ERL_NIF_T
     device_term = enif_make_resource(env, device);
     enif_release_resource(device);
 
+    send_log(env, device->logger_pid, "Device initialized, whatever that means.");
     return make_ok(env, device_term);
 }
 
@@ -148,6 +178,7 @@ static ERL_NIF_TERM cryptoauthlib_get_info(ErlNifEnv* env, int argc, const ERL_N
         return make_error(env, atom_badarg);
     }
 
+    send_log(env, device->logger_pid, "Getting device info...");
     if (!device->is_initialized) {
         return make_error(env, atom_device_error);
     }
@@ -405,7 +436,7 @@ static ERL_NIF_TERM cryptoauthlib_verify(ErlNifEnv* env, int argc, const ERL_NIF
 
     // Verify using cryptoauthlib
     bool is_verified;
-    ATCA_STATUS status = atcab_verify_stored(slot, digest.data, signature.data, &is_verified);
+    ATCA_STATUS status = atcab_verify_stored(digest.data, signature.data, slot, &is_verified);
     if (status != ATCA_SUCCESS) {
         return make_error(env, atca_status_to_atom(env, status));
     }
@@ -591,7 +622,7 @@ static ERL_NIF_TERM cryptoauthlib_is_locked(ErlNifEnv* env, int argc, const ERL_
 
 // NIF function array
 static ErlNifFunc nif_funcs[] = {
-    {"init", 0, cryptoauthlib_init, 0},
+    {"init", 1, cryptoauthlib_init, 0},
     {"release", 1, cryptoauthlib_release, 0},
     {"get_info", 1, cryptoauthlib_get_info, 0},
     {"random", 2, cryptoauthlib_random, 0},
