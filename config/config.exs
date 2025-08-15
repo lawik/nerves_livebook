@@ -106,6 +106,11 @@ config :nerves_hub_link,
   host: "https://your-nerves-hub-server.com",
   configurator: NervesHubLink.Configurator.SharedSecret
 
+config :mix_tasks_upload_hotswap,
+  app_name: :nerves_livebook,
+  nodes: [:"livebook@nerves-4740.local"],
+  cookie: :nerves_livebook_cookie
+
 if Mix.target() == :host do
   import_config "host.exs"
 else

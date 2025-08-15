@@ -73,7 +73,8 @@ defmodule NervesLivebook.MixProject do
       {:ring_logger, "~> 0.9"},
       {:toolshed, "~> 0.4.0"},
       {:jason, "~> 1.2"},
-      {:nerves_runtime, "~> 0.13.0"},
+      {:nerves_runtime, "~> 0.13.8"},
+      # {:nerves_runtime, "~> 0.13.0"},
       {:livebook, "~> 0.15.5"},
       {:plug, "~> 1.12"},
       {:vintage_net, "~> 0.13"},
@@ -138,7 +139,8 @@ defmodule NervesLivebook.MixProject do
       {:credo, "~> 1.6", only: :dev, runtime: false},
       {:dialyxir, "~> 1.3", only: :dev, runtime: false},
       {:ex_doc, "~> 0.22", only: :docs, runtime: false},
-      {:sbom, "~> 0.6", only: :dev, runtime: false}
+      {:sbom, "~> 0.6", only: :dev, runtime: false},
+      {:mix_tasks_upload_hotswap, "~> 0.1.0", only: :dev}
     ]
   end
 
