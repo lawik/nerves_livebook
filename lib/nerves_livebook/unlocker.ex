@@ -59,32 +59,54 @@ defmodule NervesLivebook.Unlocker do
   end
 
   def handle_call({:unlock, activation_key}, _from, state) do
+    case do_unlock(state, activation_key) do
+      {:ok, state} ->
+        {:reply, result, state}
+
+      result ->
+        {:reply, result, state}
+    end
+  end
+
+  defp do_unlock(state, activation_key) do
     padding = 32 - byte_size(activation_key)
     <<_::32-bytes>> = padded_key = <<activation_key::binary, 0::size(padding * 8)>>
 
     result =
       case ATECC508A.Request.auth_volatile_key(state.i2c, 1, padded_key) do
         :ok ->
-          set_up_encrypted_filesystem(state)
-          :ok
+          state = set_up_encrypted_filesystem(state)
+          {:ok, state}
 
         _ ->
           {:error, :failed}
       end
-
-    {:reply, result, state}
   end
 
   def handle_info(:check_auth, state) do
-    case ATECC508A.Request.get_latch(state.i2c) do
-      {:ok, <<1::8, 0::24>>} ->
-        Logger.info("Security chip authorized with activation key.")
-        set_up_encrypted_filesystem(state)
+    state =
+      case ATECC508A.Request.get_latch(state.i2c) do
+        {:ok, <<1::8, 0::24>>} ->
+          Logger.info("Security chip authorized with activation key.")
+          set_up_encrypted_filesystem(state)
 
-      _ ->
-        Logger.info("Security chip is not authorized. Please provide authorization...")
-        schedule_auth_check(@interval)
-    end
+        _ ->
+          Logger.info("Security chip is not authorized. Please provide authorization...")
+
+          state =
+            case attempt_auth_sources(state) do
+              {:ok, state} ->
+                Logger.info("Auth source succeeded.")
+                set_up_encrypted_filesystem(state)
+
+              {:error, {:failed, state}} ->
+                Logger.info("No auth source succeeded.")
+                schedule_auth_check(@interval)
+                state
+            end
+
+          state
+      end
 
     {:noreply, state}
   end
@@ -230,4 +252,11 @@ defmodule NervesLivebook.Unlocker do
   end
 
   defp validate_mount(s), do: s.mounted
+
+  defp attempt_auth_sources(state) do
+    # No implementation
+    # USB drive mounts automatically
+    # Can run `mtype -i /dev/sda1 key` to get the contents of the file `key`
+    {:error, {:failed, state}}
+  end
 end
