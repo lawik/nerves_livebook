@@ -114,7 +114,7 @@ defmodule NervesLivebook.Unlocker do
              @mapped_name
            ]
          ) do
-      {0, _} ->
+      {_, 0} ->
         Logger.info("Encrypted filesystem mapped successfully.")
         # Attempt to mount filesystem, stolen from NervesRuntime.Init
         %{state | mapped: true}
