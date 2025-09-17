@@ -17,6 +17,7 @@ defmodule NervesLivebook.Application do
 
     children =
       [
+        NervesLivebook.Unlocker,
         NervesLivebook.UI
       ] ++ target_children(Nerves.Runtime.mix_target())
 

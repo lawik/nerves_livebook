@@ -95,9 +95,6 @@ defmodule NervesLivebook.MixProject do
       {:kino_vega_lite, "~> 0.1.1"},
       {:maplibre, "~> 0.1.7"},
       {:nerves_hub_link, "~> 2.5"},
-      # {:nerves_key, "~> 1.0", targets: @all_targets},
-      {:nerves_key, path: "../nerves_key", override: true},
-      {:atecc508a, path: "../atecc508a", override: true},
       {:nerves_pack, "~> 0.7.0", targets: @all_targets},
       {:nerves_time_zones, "~> 0.3.0", targets: @all_targets},
       {:nx, "~> 0.9.0"},
@@ -113,6 +110,7 @@ defmodule NervesLivebook.MixProject do
       {:vega_lite, "~> 0.1"},
       {:vintage_net_wifi, "~> 0.12.5", targets: @all_targets},
       {:vintage_net_qmi, "~> 0.4.1", targets: @all_targets},
+      {:nerves_key, "~> 1.3", targets: @all_targets},
 
       # Pull in libraries that start applications, but don't automatically
       # start the applications. See the release definition below.
@@ -120,20 +118,9 @@ defmodule NervesLivebook.MixProject do
       {:owl, "~> 0.12", runtime: false},
 
       # Nerves system dependencies
-      {:nerves_system_rpi, "~> 1.30", runtime: false, targets: :rpi},
-      {:nerves_system_rpi0, "~> 1.30", runtime: false, targets: :rpi0},
-      {:nerves_system_rpi0_2, "~> 1.30", runtime: false, targets: :rpi0_2},
-      {:nerves_system_rpi2, "~> 1.30", runtime: false, targets: :rpi2},
-      {:nerves_system_rpi3, "~> 1.30", runtime: false, targets: :rpi3},
-      {:nerves_system_rpi3a, "~> 1.30", runtime: false, targets: :rpi3a},
-      {:nerves_system_rpi4, "~> 1.30", runtime: false, targets: :rpi4},
-      {:nerves_system_rpi5, "~> 0.4", runtime: false, targets: :rpi5},
-      {:nerves_system_bbb, "~> 2.25", runtime: false, targets: :bbb},
-      {:nerves_system_osd32mp1, "~> 0.20", runtime: false, targets: :osd32mp1},
-      {:nerves_system_x86_64, "~> 1.30", runtime: false, targets: :x86_64},
-      {:nerves_system_npi_imx6ull, "~> 0.17", runtime: false, targets: :npi_imx6ull},
-      {:nerves_system_grisp2, "~> 0.13", runtime: false, targets: :grisp2},
-      {:nerves_system_mangopi_mq_pro, "~> 0.11", runtime: false, targets: :mangopi_mq_pro},
+      # {:nerves_system_rpi4, "~> 1.30", runtime: false, targets: :rpi4},
+      {:nerves_system_rpi4,
+       path: Path.expand("~/projects/nerves_system_rpi4"), runtime: false, targets: :rpi4},
 
       # Compile-time only
       {:credo, "~> 1.6", only: :dev, runtime: false},
