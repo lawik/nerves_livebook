@@ -1,0 +1,130 @@
+# Mobius' round-robin database
+
+## Introduction
+
+The companion notebook **How Mobius remembers: the CircularBuffer** covers a single
+fixed-size buffer. This one shows how Mobius combines four of them into a
+[round-robin database](https://en.wikipedia.org/wiki/RRDtool) (`Mobius.RRD`), the
+structure that holds the metric history you plot.
+
+The idea: you want fine detail for the recent past and coarser detail going further
+back, all in constant memory. Mobius does that with four `CircularBuffer`s at
+different time resolutions:
+
+| Resolution | Default capacity | Covers |
+| --- | --- | --- |
+| `:second` | 120 | the last ~2 minutes, one point per second |
+| `:minute` | 120 | the last ~2 hours, one point per minute |
+| `:hour` | 48 | the last 2 days, one point per hour |
+| `:day` | 60 | the last ~2 months, one point per day |
+
+Every second the Mobius scraper takes one snapshot of the current metrics and
+inserts it. The RRD decides which resolution that snapshot belongs to.
+
+`Mobius.RRD` is an internal module (its struct is opaque), but building one by hand
+is the clearest way to see the rollup. Nothing here touches the live Mobius
+instance.
+
+## Build an empty RRD
+
+```elixir
+alias Mobius.RRD
+
+rrd = RRD.new()
+```
+
+A quick helper to see how full each resolution is. The RRD is a map whose
+`:second/:minute/:hour/:day` keys are `CircularBuffer`s, so we can count each one.
+
+```elixir
+# A plain function bound to a variable, not a module: Nerves Livebook shares one BEAM
+# across notebooks, so a redefined module would clash on a second run.
+peek = fn rrd ->
+  for resolution <- [:second, :minute, :hour, :day] do
+    buffer = Map.fetch!(rrd, resolution)
+
+    %{
+      resolution: resolution,
+      stored: Enum.count(buffer),
+      capacity: Map.from_struct(buffer).max_size
+    }
+  end
+  |> Kino.DataTable.new()
+end
+
+peek.(rrd)
+```
+
+## Insert a run of snapshots
+
+Let's simulate the scraper: one snapshot per second for 130 seconds. We start on a
+day boundary so the resolution math is easy to follow. The payload is whatever the
+scraper would store; here a single fake metric record per snapshot.
+
+```elixir
+base = 86_400 * 20_000
+
+rrd =
+  Enum.reduce(0..129, RRD.new(), fn offset, rrd ->
+    ts = base + offset
+    snapshot = [{"demo.metric", :last_value, offset, %{}}]
+    RRD.insert(rrd, ts, snapshot)
+  end)
+
+peek.(rrd)
+```
+
+Look at the counts:
+
+* `:second` filled to its capacity of 120 and is now evicting the oldest, exactly
+  the CircularBuffer behaviour from the previous notebook.
+* `:minute` collected a point each time the clock crossed a minute boundary.
+* `:day` holds a single point: the very first snapshot of the run.
+* `:hour` is empty because 130 seconds never crossed an hour boundary.
+
+## How the routing works
+
+`RRD.insert/3` checks the timestamp against the next boundary for each resolution,
+coarsest first, and stores the snapshot in the first one that matches:
+
+* crossed a new **day**? store in `:day` (and reset the lower boundaries)
+* else crossed a new **hour**? store in `:hour`
+* else crossed a new **minute**? store in `:minute`
+* else a new **second**? store in `:second`
+* else it is a duplicate within the same second, drop it
+
+So each snapshot lands in exactly one resolution. A point is promoted to a coarser
+buffer only as it ages past each boundary. That is what keeps recent history dense
+and old history sparse without ever growing the memory footprint.
+
+## Reading history back
+
+`RRD.all/1` returns every stored snapshot across all four resolutions as
+`{timestamp, snapshot}` tuples, oldest (day) to newest (second).
+
+```elixir
+all = RRD.all(rrd)
+%{total_points: length(all), oldest: List.first(all), newest: List.last(all)}
+```
+
+`RRD.query/2` and `RRD.query/3` pull a time window, which is what
+`Mobius.Exports.plot/4` and friends use under the hood.
+
+```elixir
+# Everything from 30 seconds into the run onward
+RRD.query(rrd, base + 100) |> length()
+```
+
+## Putting it together
+
+A metric's life inside Mobius:
+
+1. A telemetry handler writes the current value into an ETS table (cheap, no copy).
+2. Once a second the scraper snapshots that table and calls `RRD.insert/3`.
+3. The RRD files the snapshot into the right `CircularBuffer`, ageing older points
+   into coarser resolutions and dropping anything past capacity.
+4. When you plot or export, Mobius reads the window back out with `RRD.query/3`.
+
+Four small fixed-size buffers, and you get two months of history on a device with no
+unbounded growth. Open **Mobius histograms with DDSketch** to see how Mobius keeps
+*distributions* (not just single values) under the same constant-memory constraint.

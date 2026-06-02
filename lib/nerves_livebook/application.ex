@@ -18,6 +18,7 @@ defmodule NervesLivebook.Application do
 
     children =
       [
+        NervesLivebook.Telemetry,
         NervesLivebook.UI
       ] ++ target_children(Nerves.Runtime.mix_target())
 

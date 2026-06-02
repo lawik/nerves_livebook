@@ -9,13 +9,13 @@ defmodule NervesLivebook.MixProject do
 
   @rpi_targets [:rpi, :rpi0, :rpi2, :rpi3, :rpi3a, :rpi4, :rpi0_2, :rpi5]
   @all_targets @rpi_targets ++
-                 [:bbb, :osd32mp1, :x86_64, :npi_imx6ull, :grisp2, :mangopi_mq_pro]
+                 [:bbb, :osd32mp1, :x86_64, :npi_imx6ull, :grisp2, :mangopi_mq_pro, :qemu_aarch64]
 
   # See the BlueHeron repository for the boards that it supports.
   @ble_targets [:rpi0, :rpi0_2, :rpi3, :rpi3a]
 
   # Targets where Nx ML deps (NxEigen backend, Axon, Bumblebee) are pulled in.
-  @ml_targets [:rpi4, :rpi5]
+  @ml_targets [:rpi4]
 
   # Instruct the compiler to create deterministic builds to minimize
   # differences between firmware versions. This helps delta firmware update
@@ -105,19 +105,16 @@ defmodule NervesLivebook.MixProject do
       {:nerves_time_zones, "~> 0.3.0", targets: @all_targets},
       {:nx, "~> 0.12.0"},
       {:axon, "~> 0.8", targets: @ml_targets},
-      {:bumblebee, "~> 0.7", targets: @ml_targets},
       {:nx_eigen, "~> 0.1", targets: @ml_targets},
-      {:nx_signal, "~> 0.2", targets: @ml_targets},
-      {:scholar, "~> 0.4", targets: @ml_targets},
       {:phoenix_pubsub, "~> 2.0"},
       {:pinout, "~> 0.1"},
       {:progress_bar, "~> 3.0"},
       {:ramoops_logger, "~> 0.1", targets: @all_targets},
       {:recon, "~> 2.5"},
       {:req, "~> 0.5"},
-      {:scroll_hat, "~> 0.1", targets: @rpi_targets},
+      {:telemetry_metrics, "~> 1.0"},
+      {:telemetry_poller, "~> 1.0"},
       {:stb_image, "~> 0.6.0"},
-      {:tflite_elixir, "~> 0.3.6", targets: @all_targets},
       {:vega_lite, "~> 0.1"},
       {:vintage_net_wifi, "~> 0.12.5", targets: @all_targets},
       {:vintage_net_qmi, "~> 0.4.1", targets: @all_targets},
@@ -141,12 +138,14 @@ defmodule NervesLivebook.MixProject do
       {:nerves_system_npi_imx6ull, "~> 0.21", runtime: false, targets: :npi_imx6ull},
       {:nerves_system_grisp2, "~> 0.17", runtime: false, targets: :grisp2},
       {:nerves_system_mangopi_mq_pro, "~> 0.15", runtime: false, targets: :mangopi_mq_pro},
+      {:nerves_system_qemu_aarch64, "> 0.0.0", runtime: false, targets: :qemu_aarch64},
 
       # Compile-time only
       {:credo, "~> 1.6", only: :dev, runtime: false},
       {:dialyxir, "~> 1.3", only: :dev, runtime: false},
       {:ex_doc, "~> 0.22", only: :docs, runtime: false},
-      {:sbom, "~> 0.6", only: :dev, runtime: false}
+      {:sbom, "~> 0.6", only: :dev, runtime: false},
+      {:mobius, github: "mobius-home/mobius", branch: "histograms"}
     ]
   end
 

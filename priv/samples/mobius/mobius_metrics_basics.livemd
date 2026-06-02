@@ -1,0 +1,191 @@
+# Mobius metrics: the basics
+
+This Nerves device is already recording [Mobius](https://hexdocs.pm/mobius) metrics —
+CPU, memory, BEAM and Phoenix numbers — into a small on-device time-series store.
+Explore them live below, then read on for how it works. When a single number per
+point stops being enough, the **Mobius histograms** notebook picks up from here.
+
+```elixir
+instance =
+  Process.registered()
+  |> Enum.find_value(fn name ->
+    case Atom.to_string(name) do
+      "Elixir.Mobius.Scraper." <> instance -> String.to_atom(instance)
+      "Elixir.Mobius.Registry." <> instance -> String.to_atom(instance)
+      "Elixir.Mobius.ReportServer." <> instance -> String.to_atom(instance)
+      _ -> nil
+    end
+  end) || raise "No Mobius instance is running. Start one with {Mobius, metrics: [...]}."
+```
+
+```elixir
+# {name, type, group}. type is the Telemetry.Metrics type Mobius stored it under;
+# group is just for the "Latest values" chart below. Plain data, no module — Nerves
+# Livebook shares one BEAM across notebooks, so a redefined module would clash.
+metrics = [
+  {"system.cpu.utilization.percent", :last_value, "CPU"},
+  {"system.cpu.temperature.celsius", :last_value, "CPU"},
+  {"system.load.avg1", :last_value, "Load average"},
+  {"system.load.avg5", :last_value, "Load average"},
+  {"system.load.avg15", :last_value, "Load average"},
+  {"system.memory.used_bytes", :last_value, "Device memory"},
+  {"system.memory.available_bytes", :last_value, "Device memory"},
+  {"system.memory.total_bytes", :last_value, "Device memory"},
+  {"vm.memory.total", :last_value, "BEAM memory"},
+  {"vm.memory.processes", :last_value, "BEAM memory"},
+  {"vm.memory.binary", :last_value, "BEAM memory"},
+  {"vm.memory.ets", :last_value, "BEAM memory"},
+  {"vm.total_run_queue_lengths.total", :last_value, "Run queue"},
+  {"vm.total_run_queue_lengths.cpu", :last_value, "Run queue"},
+  {"vm.total_run_queue_lengths.io", :last_value, "Run queue"},
+  {"vm.system_counts.process_count", :last_value, "BEAM counts"},
+  {"vm.system_counts.atom_count", :last_value, "BEAM counts"},
+  {"vm.system_counts.port_count", :last_value, "BEAM counts"},
+  {"phoenix.endpoint.stop.count", :counter, "Phoenix counters"},
+  {"phoenix.error_rendered.count", :counter, "Phoenix counters"},
+  {"phoenix.socket_connected.count", :counter, "Phoenix counters"},
+  {"phoenix.channel_joined.count", :counter, "Phoenix counters"},
+  {"phoenix.live_view.mount.stop.count", :counter, "Phoenix counters"},
+  {"phoenix.live_view.handle_event.stop.count", :counter, "Phoenix counters"}
+]
+
+types = Map.new(metrics, fn {name, type, _group} -> {name, type} end)
+```
+
+## Over time
+
+```elixir
+ot_controls =
+  Kino.Control.form(
+    [
+      metric: Kino.Input.select("Metric", Enum.map(metrics, fn {n, _, _} -> {n, n} end), default: "system.cpu.temperature.celsius"),
+      amount: Kino.Input.number("Last", default: 10),
+      unit: Kino.Input.select("Per", [second: "seconds", minute: "minutes", hour: "hours", day: "days"], default: :minute)
+    ],
+    submit: "Plot"
+  )
+
+ot_frame = Kino.Frame.new()
+
+render_over_time = fn %{metric: name, amount: amount, unit: unit} ->
+  amount = trunc(amount || 1)
+  now = System.system_time(:second)
+  data = Mobius.Exports.metrics(name, types[name], %{}, last: {amount, unit}, mobius_instance: instance)
+
+  content =
+    if data == [] do
+      Kino.Markdown.new("_No data for #{name} in the last #{amount} #{unit}._")
+    else
+      rows = Enum.map(data, fn %{timestamp: ts, value: value} -> %{"seconds_ago" => ts - now, "value" => value} end)
+
+      VegaLite.new(width: 640, height: 300, title: "#{name} — last #{amount} #{unit}")
+      |> VegaLite.data_from_values(rows)
+      |> VegaLite.mark(:line, point: true, tooltip: true)
+      |> VegaLite.encode_field(:x, "seconds_ago", type: :quantitative, axis: [title: "seconds (0 = now)"])
+      |> VegaLite.encode_field(:y, "value", type: :quantitative, scale: [zero: false], axis: [title: name])
+    end
+
+  Kino.Frame.render(ot_frame, content)
+end
+
+render_over_time.(%{metric: "system.cpu.temperature.celsius", amount: 10, unit: :minute})
+Kino.listen(ot_controls, fn %{data: data} -> render_over_time.(data) end)
+
+Kino.Layout.grid([ot_controls, ot_frame], boxed: true)
+```
+
+## Latest values
+
+```elixir
+groups = metrics |> Enum.map(fn {_, _, group} -> group end) |> Enum.uniq()
+
+lv_controls =
+  Kino.Control.form(
+    [group: Kino.Input.select("Group", Enum.map(groups, &{&1, &1}), default: "BEAM memory")],
+    submit: "Show"
+  )
+
+lv_frame = Kino.Frame.new()
+
+render_latest = fn %{group: group} ->
+  rows =
+    metrics
+    |> Enum.filter(fn {_, _, g} -> g == group end)
+    |> Enum.map(fn {name, type, _} ->
+      value =
+        case Mobius.Exports.metrics(name, type, %{}, last: {5, :minute}, mobius_instance: instance) do
+          [] -> nil
+          data -> List.last(data).value
+        end
+
+      %{"metric" => name, "value" => value}
+    end)
+    |> Enum.reject(&(&1["value"] == nil))
+
+  content =
+    if rows == [] do
+      Kino.Markdown.new("_No recent data for #{group}._")
+    else
+      VegaLite.new(width: 640, height: 300, title: "#{group} — latest value")
+      |> VegaLite.data_from_values(rows)
+      |> VegaLite.mark(:bar, tooltip: true)
+      |> VegaLite.encode_field(:y, "metric", type: :nominal, sort: "-x", axis: [title: nil])
+      |> VegaLite.encode_field(:x, "value", type: :quantitative, axis: [title: "value"])
+    end
+
+  Kino.Frame.render(lv_frame, content)
+end
+
+render_latest.(%{group: "BEAM memory"})
+Kino.listen(lv_controls, fn %{data: data} -> render_latest.(data) end)
+
+Kino.Layout.grid([lv_controls, lv_frame], boxed: true)
+```
+
+## How it works
+
+Mobius collects [`telemetry`](https://hexdocs.pm/telemetry) metrics locally and keeps
+a rolling history you can query right on the device. Nothing leaves the device.
+
+A metric is a `Telemetry.Metrics` definition with a **type** that decides how Mobius
+folds events into a single stored value per sample:
+
+* `last_value` — a gauge; the most recent reading (temperature, memory, queue length).
+* `counter` — a running count of events (HTTP requests served, LiveView mounts).
+* `sum`, `summary` — totals and statistical summaries (a `summary` with histograms
+  enabled is what the **Mobius histograms** notebook explores).
+
+The path a number takes: a telemetry event fires, a handler writes the current value
+straight into an ETS table (cheap, no message passing), and once a second the Scraper
+snapshots that table into a round-robin database. You read it back with
+`Mobius.Exports`.
+
+```elixir
+# Raw timestamped points — exactly what the graphs above are built from.
+Mobius.Exports.metrics("vm.memory.total", :last_value, %{}, last: {1, :minute}, mobius_instance: instance)
+```
+
+```elixir
+# Just the values, handy for a quick sparkline or a calculation.
+Mobius.Exports.series("system.cpu.temperature.celsius", :last_value, %{}, last: {1, :minute}, mobius_instance: instance)
+```
+
+`Mobius.Exports.plot/4` will even draw an ASCII chart straight to the output if you
+prefer text over VegaLite.
+
+```elixir
+Mobius.Exports.plot("system.cpu.temperature.celsius", :last_value, %{}, last: {5, :minute}, mobius_instance: instance)
+```
+
+History is kept at four resolutions in a fixed amount of memory — roughly the last 2
+minutes per second, ~2 hours per minute, ~48 hours per hour and ~60 days per day — so
+older data thins out but never grows unbounded. On this device that history is also
+written to flash (`autosave_interval: 60`) so it survives reboots.
+
+## Next: histograms
+
+A `last_value` or a counter gives you one number per sample. That hides the *shape* of
+things — the tail of slow requests, the p99 that decides whether users are happy. When
+you need the distribution, open the **Mobius histograms** notebook, where these same
+metrics carry DDSketch histograms and the graphs become distributions and quantiles
+over time.

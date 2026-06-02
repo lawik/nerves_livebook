@@ -1,0 +1,112 @@
+# Watching Mobius work: message tracing
+
+## Introduction
+
+The companion notebook **Inside Mobius: the process tree** shows *which* processes
+make up Mobius. This one shows them *in motion*: we use
+[`Kino.Process.seq_trace/3`](https://kino.hexdocs.pm/Kino.Process.html) to capture
+the messages that flow between processes while a function runs, and render them as a
+sequence diagram.
+
+It is a great way to see the difference between Mobius' two paths:
+
+* **Ingestion** (recording a metric) is a direct ETS write. No messages, no mailbox,
+  no contention. That is what keeps it cheap.
+* **Queries** (asking for history) are `GenServer.call/2` round trips between the
+  process asking and Mobius' own processes.
+
+The traces below make that contrast visible.
+
+## Find the running Mobius instance
+
+Same discovery as the process-tree notebook: Mobius registers each worker as
+`Mobius.<Component>.<instance>`, so we read the instance (usually `:mobius`) off a
+worker's name.
+
+```elixir
+instance =
+  Process.registered()
+  |> Enum.find_value(fn name ->
+    case Atom.to_string(name) do
+      "Elixir.Mobius.Scraper." <> instance -> instance
+      "Elixir.Mobius.Registry." <> instance -> instance
+      "Elixir.Mobius.ReportServer." <> instance -> instance
+      _ -> nil
+    end
+  end)
+
+instance =
+  case instance do
+    nil -> raise "No Mobius worker processes are running. Start one with {Mobius, metrics: [...]}."
+    name -> String.to_atom(name)
+  end
+```
+
+## Trace 1: a "latest metrics" query
+
+`Mobius.get_latest_metrics/1` asks Mobius for every metric recorded since you last
+called it. `render_seq_trace/2` runs the function, draws the messages, and returns
+the function's result.
+
+Watch the two hops: this notebook's process calls the **ReportServer**, which in
+turn calls the **Scraper** to pull snapshots out of the history database, then the
+replies travel back.
+
+```elixir
+Kino.Process.render_seq_trace(fn ->
+  Mobius.get_latest_metrics(instance)
+end)
+```
+
+The returned value (printed below the diagram) is the list of metrics for that
+window. It may be empty if nothing has been recorded yet, but the *message flow* is
+the same either way.
+
+## Trace 2: a direct history query
+
+`Mobius.Scraper.all/1` reads the whole history database. It is one hop: this process
+calls the **Scraper** directly and gets the snapshots back. Compare this single
+round trip to the two-hop diagram above.
+
+```elixir
+Kino.Process.render_seq_trace(fn ->
+  Mobius.Scraper.all(instance)
+end)
+```
+
+## Trace 3: the shape of the ingestion path
+
+Recording a metric does not go through any of these GenServers. A `:telemetry`
+handler runs in whatever process emitted the event and writes the value straight
+into an ETS table. ETS reads and writes are not messages, so a trace of that work is
+nearly empty.
+
+We can show the shape of it with a self-contained ETS write. Notice there are no
+inter-process arrows: that is exactly what Mobius' write path looks like.
+
+```elixir
+Kino.Process.render_seq_trace(fn ->
+  table = :ets.new(:demo, [:public])
+  :ets.insert(table, {:example, 42})
+  result = :ets.lookup(table, :example)
+  :ets.delete(table)
+  result
+end)
+```
+
+So the full life of a metric is: a telemetry event writes to ETS (no messages,
+Trace 3) → once a second the Scraper copies the table into history (a timer inside
+one process) → you query that history through a GenServer call (Traces 1 and 2).
+
+## Bonus: see the data the queries return
+
+Tracing shows the plumbing; `Mobius.Exports.plot/4` shows the payload. Pick any
+metric name from `Mobius.info/1` and plot its recent history as an ASCII chart.
+
+```elixir
+# Swap "vm.memory.total" for any metric listed by Mobius.info(instance)
+Mobius.Exports.plot("vm.memory.total", :last_value, %{}, mobius_instance: instance)
+```
+
+If you get an empty plot, that metric has not been recorded yet, or it is registered
+under a different name. Run `Mobius.info(instance)` to see what is available.

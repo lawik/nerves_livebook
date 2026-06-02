@@ -1,0 +1,128 @@
+# Inside Mobius: the process tree
+
+## Introduction
+
+[Mobius](https://github.com/mobius-home/mobius) is a small library that collects
+[`telemetry`](https://hexdocs.pm/telemetry) metrics locally on a device and keeps
+a rolling history you can plot right on the device. It is a handful of cooperating
+processes, and the best way to understand how it works is to *look* at them.
+
+This notebook uses [`Kino.Process`](https://kino.hexdocs.pm/Kino.Process.html) to
+draw Mobius' supervision tree and explain what each process does. A companion
+notebook, **Watching Mobius work**, traces the messages that flow between these
+processes while Mobius answers a query.
+
+Nothing here changes any state, so it is safe to run against a live system.
+
+## Find the running Mobius processes
+
+Rather than hard-code names, we discover Mobius by scanning the process registry.
+Mobius registers each worker as `Mobius.<Component>.<instance>` (for example
+`Mobius.Scraper.mobius`) and its supervisor as `Mobius.Supervisor`. Let's list every
+registered name under the `Mobius.` namespace.
+
+```elixir
+mobius_names =
+  Process.registered()
+  |> Enum.filter(&String.starts_with?(Atom.to_string(&1), "Elixir.Mobius."))
+  |> Enum.sort()
+
+Kino.DataTable.new(Enum.map(mobius_names, &%{process: inspect(&1)}))
+```
+
+The *instance* (usually `:mobius`) is the lowercase tail on a worker's name. We read
+it off a worker rather than the supervisor, since the supervisor name carries no
+instance suffix. If this raises, Mobius is not started yet: add
+`{Mobius, metrics: [...]}` to your supervision tree and re-run.
+
+```elixir
+instance =
+  Enum.find_value(mobius_names, fn name ->
+    case Atom.to_string(name) do
+      "Elixir.Mobius.Scraper." <> instance -> instance
+      "Elixir.Mobius.Registry." <> instance -> instance
+      "Elixir.Mobius.ReportServer." <> instance -> instance
+      _ -> nil
+    end
+  end)
+
+instance =
+  case instance do
+    nil -> raise "No Mobius worker processes are running. Start one with {Mobius, metrics: [...]}."
+    name -> String.to_atom(name)
+  end
+```
+
+And the supervisor (what we will draw the tree from). We match the `Mobius.Supervisor`
+name with or without an instance suffix, so this works across Mobius versions.
+
+```elixir
+supervisor =
+  Enum.find(mobius_names, fn name ->
+    string = Atom.to_string(name)
+    string == "Elixir.Mobius.Supervisor" or String.starts_with?(string, "Elixir.Mobius.Supervisor.")
+  end)
+```
+
+## The supervision tree
+
+This is the heart of Mobius. `Kino.Process.sup_tree/2` walks the supervisor and
+renders every child. Solid lines are supervisor/worker links; dotted lines are
+plain process links.
+
+```elixir
+Kino.Process.sup_tree(supervisor, direction: :left_right)
+```
+
+Each worker has a single job:
+
+| Process | Role |
+| --- | --- |
+| `Mobius.Registry` | Attaches the `:telemetry` handlers for your metrics and events when Mobius starts. |
+| `Mobius.Scraper` | Once a second, snapshots the current metric values into an in-memory round-robin database. This is the history you plot. |
+| `Mobius.ReportServer` | Answers "what is new since I last asked" queries (`get_latest_metrics/1`, `get_latest_events/1`). |
+| `Mobius.EventsServer` | Keeps the event log, a ring buffer of discrete events. |
+| `Mobius.TimeServer` | Tracks when Mobius started and, on devices that boot without a real clock, corrects event timestamps once the clock syncs. |
+| `Mobius.MetricsTable.Monitor` | Writes the current-values table to disk on a graceful shutdown so history survives a reboot. |
+
+The current metric *values* themselves live in an [ETS](https://www.erlang.org/doc/man/ets)
+table owned by the supervisor, not in a process of their own. Telemetry handlers
+write straight into that table, which is why recording a metric is cheap. The
+Scraper periodically copies that table into the history database.
+
+## Where Mobius sits in the larger picture
+
+`Kino.Process.app_tree/2` shows an entire OTP application's tree. Mobius runs under
+whichever application started it, so on a Nerves Livebook device that is usually
+`:nerves_livebook`. Look for the `Mobius.Supervisor.*` subtree among the other
+children.
+
+```elixir
+Kino.Process.app_tree(:nerves_livebook, direction: :left_right)
+```
+
+If you started Mobius somewhere else, swap in that application's name. You can list
+running applications with `Application.started_applications/0`.
+
+## What is Mobius actually tracking?
+
+Now that the processes make sense, peek at their contents. `Mobius.Registry.metrics/1`
+returns the `Telemetry.Metrics` definitions the Registry attached handlers for.
+
+```elixir
+Mobius.Registry.metrics(instance)
+```
+
+`Mobius.info/1` prints the current value of every metric straight from the ETS
+table the Scraper reads.
+
+```elixir
+Mobius.info(instance)
+```
+
+## Next steps
+
+* Open **Watching Mobius work** to trace the messages exchanged when Mobius answers
+  a query.
+* Plot a metric's history with `Mobius.Exports.plot("vm.memory.total", :last_value, %{})`
+  (substitute any name listed by `Mobius.info/1` above).

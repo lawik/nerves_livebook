@@ -1,0 +1,425 @@
+# Mobius histograms with DDSketch
+
+This Nerves device is already recording
+[DDSketch](https://www.vldb.org/pvldb/vol12/p2195-masson.pdf) histograms for its
+system, BEAM and Phoenix metrics. Explore them live below, then read on for how the
+sketch works.
+
+```elixir
+instance =
+  Process.registered()
+  |> Enum.find_value(fn name ->
+    case Atom.to_string(name) do
+      "Elixir.Mobius.Scraper." <> instance -> String.to_atom(instance)
+      "Elixir.Mobius.Registry." <> instance -> String.to_atom(instance)
+      "Elixir.Mobius.ReportServer." <> instance -> String.to_atom(instance)
+      _ -> nil
+    end
+  end) || raise "No Mobius instance is running. Start one with {Mobius, metrics: [...]}."
+```
+
+```elixir
+metrics = [
+  "system.cpu.utilization.percent",
+  "system.cpu.temperature.celsius",
+  "system.memory.used_bytes",
+  "vm.memory.total",
+  "vm.total_run_queue_lengths.total",
+  "phoenix.endpoint.stop.duration",
+  "phoenix.live_view.mount.stop.duration",
+  "phoenix.live_view.handle_event.stop.duration"
+]
+
+# Project a sketch to sorted {value, count} bars. A plain function bound to a
+# variable, not a module: Nerves Livebook shares one BEAM across notebooks, so a
+# `defmodule` would fail to redefine on a second run. The representative value of a
+# bin is `2·γ^idx / (γ + 1)`, the same value `quantile/2` reports for it.
+bars = fn sketch ->
+  gamma = sketch.gamma
+
+  Mobius.DDSketch.bins(sketch)
+  |> Enum.map(fn
+    {{:hist, :zero}, count} -> {0.0, count}
+    {{:hist, :pos, idx}, count} -> {2.0 * :math.pow(gamma, idx) / (gamma + 1.0), count}
+    {{:hist, :neg, idx}, count} -> {-(2.0 * :math.pow(gamma, idx) / (gamma + 1.0)), count}
+  end)
+  |> Enum.sort()
+end
+```
+
+## Distribution
+
+```elixir
+bins_controls =
+  Kino.Control.form(
+    [
+      metric: Kino.Input.select("Metric", Enum.map(metrics, &{&1, &1}), default: "phoenix.endpoint.stop.duration"),
+      amount: Kino.Input.number("Last", default: 1),
+      unit: Kino.Input.select("Per", [second: "seconds", minute: "minutes", hour: "hours", day: "days"], default: :hour)
+    ],
+    submit: "Plot"
+  )
+
+bins_frame = Kino.Frame.new()
+
+render_bins = fn %{metric: metric, amount: amount, unit: unit} ->
+  amount = trunc(amount || 1)
+  {:ok, sketch} = Mobius.Exports.histogram(metric, %{}, last: {amount, unit}, mobius_instance: instance)
+
+  content =
+    if Mobius.DDSketch.total_count(sketch) == 0 do
+      Kino.Markdown.new("_No observations for #{metric} in the last #{amount} #{unit}._")
+    else
+      data = Enum.map(bars.(sketch), fn {value, count} -> %{"bin" => Float.round(value, 2), "count" => count} end)
+
+      VegaLite.new(width: 640, height: 300, title: "#{metric} — last #{amount} #{unit}")
+      |> VegaLite.data_from_values(data)
+      |> VegaLite.mark(:bar, tooltip: true)
+      |> VegaLite.encode_field(:x, "bin", type: :ordinal, sort: :ascending, axis: [label_angle: -45, title: metric])
+      |> VegaLite.encode_field(:y, "count", type: :quantitative, axis: [title: "observations"])
+    end
+
+  Kino.Frame.render(bins_frame, content)
+end
+
+render_bins.(%{metric: "phoenix.endpoint.stop.duration", amount: 1, unit: :hour})
+Kino.listen(bins_controls, fn %{data: data} -> render_bins.(data) end)
+
+Kino.Layout.grid([bins_controls, bins_frame], boxed: true)
+```
+
+## Over time
+
+```elixir
+# {field, quantile, label}. The checkboxes are laid out in a single horizontal row
+# below, so they share space instead of stacking.
+quantile_fields = [
+  {:p50, 0.5, "p50"},
+  {:p90, 0.9, "p90"},
+  {:p95, 0.95, "p95"},
+  {:p99, 0.99, "p99"},
+  {:p999, 0.999, "p99.9"}
+]
+
+unit_seconds = %{second: 1, minute: 60, hour: 3600, day: 86_400}
+
+ts_metric = Kino.Input.select("Metric", Enum.map(metrics, &{&1, &1}), default: "phoenix.endpoint.stop.duration")
+ts_amount = Kino.Input.number("Last", default: 1)
+ts_unit = Kino.Input.select("Per", [second: "seconds", minute: "minutes", hour: "hours", day: "days"], default: :hour)
+ts_checks = Enum.map(quantile_fields, fn {field, _q, label} -> {field, Kino.Input.checkbox(label, default: field in [:p50, :p95, :p99])} end)
+ts_plot = Kino.Control.button("Plot")
+ts_frame = Kino.Frame.new()
+
+render_ts = fn state ->
+  selected = for {field, q, label} <- quantile_fields, state[field], do: {q, label}
+  amount = trunc(state.amount || 1)
+  unit = state.unit
+  metric = state.metric
+  now = System.system_time(:second)
+  cutoff = now - amount * unit_seconds[unit]
+
+  # Each consecutive pair of stored snapshots is a window — Mobius' own RRD cadence
+  # sets the resolution. Keep only snapshots inside the chosen period (and drop
+  # pre-clock-sync boot timestamps, which fall outside the 60-day horizon).
+  windows =
+    Mobius.Scraper.all_histograms(instance)
+    |> Enum.map(&elem(&1, 0))
+    |> Enum.uniq()
+    |> Enum.sort()
+    |> Enum.filter(fn ts -> ts >= cutoff and now - ts <= 60 * 86_400 end)
+    |> Enum.chunk_every(2, 1, :discard)
+
+  qs = Enum.map(selected, &elem(&1, 0))
+
+  content =
+    cond do
+      selected == [] ->
+        Kino.Markdown.new("_Pick at least one quantile._")
+
+      true ->
+        rows =
+          Enum.flat_map(windows, fn [from, to] ->
+            {:ok, qmap} = Mobius.Exports.quantiles(metric, qs, %{}, from: from, to: to, mobius_instance: instance)
+            for {q, label} <- selected, qmap[q] != nil do
+              %{"seconds_ago" => to - now, "value" => Float.round(qmap[q], 2), "quantile" => label}
+            end
+          end)
+
+        if rows == [] do
+          Kino.Markdown.new("_No stored history for #{metric} in the last #{amount} #{unit}._")
+        else
+          VegaLite.new(width: 640, height: 300, title: "#{metric} — quantiles over the last #{amount} #{unit}")
+          |> VegaLite.data_from_values(rows)
+          |> VegaLite.mark(:line, point: true, tooltip: true)
+          |> VegaLite.encode_field(:x, "seconds_ago", type: :quantitative, axis: [title: "seconds (0 = now)"])
+          |> VegaLite.encode_field(:y, "value", type: :quantitative, scale: [zero: false], axis: [title: metric])
+          |> VegaLite.encode_field(:color, "quantile", type: :nominal, sort: Enum.map(selected, &elem(&1, 1)))
+        end
+    end
+
+  Kino.Frame.render(ts_frame, content)
+end
+
+# Track every control's value in state (events carry the new value); the listener
+# runs off-process, so we render from this state rather than reading inputs back.
+ts_initial = %{
+  metric: "phoenix.endpoint.stop.duration",
+  amount: 1,
+  unit: :hour,
+  p50: true,
+  p90: false,
+  p95: true,
+  p99: true,
+  p999: false
+}
+
+render_ts.(ts_initial)
+
+Kino.listen(
+  Kino.Control.tagged_stream([{:metric, ts_metric}, {:amount, ts_amount}, {:unit, ts_unit}, {:plot, ts_plot}] ++ Enum.map(ts_checks, fn {field, input} -> {field, input} end)),
+  ts_initial,
+  fn
+    {:plot, _event}, state ->
+      render_ts.(state)
+      {:cont, state}
+
+    {field, %{value: value}}, state ->
+      state = Map.put(state, field, value)
+      render_ts.(state)
+      {:cont, state}
+  end
+)
+
+Kino.Layout.grid(
+  [
+    Kino.Layout.grid([ts_metric, ts_amount, ts_unit], columns: 3),
+    Kino.Layout.grid(Enum.map(ts_checks, fn {_field, input} -> input end), columns: 5),
+    ts_plot,
+    ts_frame
+  ],
+  boxed: true
+)
+```
+
+How far back the time graph reaches depends on what Mobius has retained and
+persisted: roughly the last 2 minutes at 1-second resolution, ~2 hours at 1-minute,
+~48 hours hourly and ~60 days daily. That whole structure is saved to
+`<persistence_dir>/history` and reloaded on boot, but only if Mobius gets to save —
+on a graceful shutdown, an explicit `Mobius.save/1`, or a configured
+`autosave_interval` (this firmware sets `autosave_interval: 60`).
+
+## How it works
+
+The graphs above query a live Mobius instance. The rest of the notebook builds a
+sketch by hand to show what is happening underneath. `Mobius.DDSketch` is a pure data
+structure (no process), so these cells run without touching the live instance.
+
+A `last_value` or an average tells you the *typical* case. It hides the *tail*, the
+slow requests, the occasional spike, the p99 that decides whether your users are
+happy. To see the tail you need the whole distribution, and on a small device you
+need it without storing every sample. DDSketch estimates any percentile with a
+*bounded relative error* while using memory proportional to the spread of values, not
+the number of samples.
+
+## Why not just average?
+
+Here is a batch of request latencies in milliseconds: mostly fast, with a small
+slow tail, the shape almost every real system has.
+
+```elixir
+fast = for _ <- 1..970, do: Enum.random(9..16)
+slow = for _ <- 1..30, do: Enum.random(220..400)
+samples = Enum.shuffle(fast ++ slow)
+
+average = Enum.sum(samples) / length(samples)
+Float.round(average, 1)
+```
+
+The average looks healthy. But 3% of requests are several times slower, and the
+average says nothing about them. That is the tail a histogram exists to expose.
+
+## Build a sketch
+
+A sketch is created with a relative accuracy (α), the error bound on every quantile
+it returns. Then you insert observations one at a time.
+
+```elixir
+alias Mobius.DDSketch
+
+sketch =
+  Enum.reduce(samples, DDSketch.new(relative_accuracy: 0.05), fn value, sketch ->
+    DDSketch.insert(sketch, value)
+  end)
+
+DDSketch.total_count(sketch)
+```
+
+## Graph the distribution
+
+A sketch *is* a histogram: a count per bin. Plotting those bins shows the shape the
+average flattened away, a tall cluster of fast requests on the left and a low, wide
+slow tail trailing off to the right.
+
+`DDSketch.bins/1` returns `{bin_key, count}` pairs. Each positive bin's
+representative value is `2·γ^idx / (γ + 1)` (the same value `quantile/2` reports for
+that bin), where `γ` is derived from α. Bins are spaced *geometrically*, each about α
+wider than the last, so we treat the x-axis as ordered categories rather than a
+linear scale; that even ratio spacing is what keeps the relative error constant
+across the whole range.
+
+```elixir
+alias VegaLite, as: Vl
+
+gamma = sketch.gamma
+
+bins =
+  DDSketch.bins(sketch)
+  |> Enum.map(fn
+    {{:hist, :zero}, count} -> {0.0, count}
+    {{:hist, :pos, idx}, count} -> {2.0 * :math.pow(gamma, idx) / (gamma + 1.0), count}
+    {{:hist, :neg, idx}, count} -> {-(2.0 * :math.pow(gamma, idx) / (gamma + 1.0)), count}
+  end)
+  |> Enum.sort()
+  |> Enum.map(fn {value, count} -> %{"value_ms" => Float.round(value, 1), "count" => count} end)
+
+Vl.new(width: 640, height: 300, title: "Request latency distribution (DDSketch bins)")
+|> Vl.data_from_values(bins)
+|> Vl.mark(:bar, tooltip: true)
+|> Vl.encode_field(:x, "value_ms",
+  type: :ordinal,
+  sort: :ascending,
+  axis: [label_angle: -45, title: "bin value (ms, geometric spacing)"]
+)
+|> Vl.encode_field(:y, "count", type: :quantitative, axis: [title: "observations"])
+```
+
+The bars to the right are the tail the average buried: a handful of requests several
+times slower than the typical one. Counting bars also makes the next point concrete,
+a thousand samples collapse into about a dozen bins.
+
+## Read the distribution
+
+Now ask for quantiles. The median and p95 sit down in the fast cluster; p99 jumps
+into the slow tail, the thing the average hid.
+
+```elixir
+for q <- [0.5, 0.95, 0.99] do
+  %{quantile: "p#{round(q * 100)}", estimate_ms: Float.round(DDSketch.quantile(sketch, q), 1)}
+end
+|> Kino.DataTable.new()
+```
+
+The sketch also answers threshold ("SLO") questions directly, without scanning any
+raw data:
+
+```elixir
+budget_ms = 200
+
+%{
+  met_budget: DDSketch.count_below(sketch, budget_ms),
+  missed_budget: DDSketch.count_above(sketch, budget_ms),
+  total: DDSketch.total_count(sketch)
+}
+```
+
+## How accurate is "estimate"?
+
+DDSketch trades exactness for memory, but the trade is *bounded*. Every quantile it
+returns is within α (here 5%) of the true value. Compare the estimate against the
+true p99 computed from the raw samples:
+
+```elixir
+sorted = Enum.sort(samples)
+true_p99 = Enum.at(sorted, round(0.99 * (length(sorted) - 1)))
+estimate = DDSketch.quantile(sketch, 0.99)
+
+%{
+  true_p99: true_p99,
+  estimate: Float.round(estimate, 1),
+  relative_error: Float.round(abs(estimate - true_p99) / true_p99, 4),
+  bound: 0.05
+}
+```
+
+The relative error stays under the bound. Tighten α for more precision (and more
+bins), loosen it to save memory.
+
+## Where the memory savings come from
+
+A sketch is just a sparse map of bin counters. Each observed value maps to a bin
+whose width grows geometrically with magnitude, that geometric spacing is what makes
+the relative error constant across the whole range. The number of bins depends on
+how many *different magnitudes* you saw, never on how many samples or how long the
+device has been up.
+
+```elixir
+%{
+  samples_observed: DDSketch.total_count(sketch),
+  bins_stored: length(DDSketch.bins(sketch))
+}
+```
+
+A thousand samples collapse into a dozen-ish integer counters. That is the property
+that lets Mobius keep distributions on a device for as long as it wants.
+
+## Mergeable, and why that matters for windows
+
+Two sketches with the same α can be merged by summing their bin counters. Merging is
+exact, no error is added.
+
+```elixir
+morning = Enum.reduce([10, 10, 12], DDSketch.new(relative_accuracy: 0.05), &DDSketch.insert(&2, &1))
+evening = Enum.reduce([300, 320], DDSketch.new(relative_accuracy: 0.05), &DDSketch.insert(&2, &1))
+
+DDSketch.merge(morning, evening) |> DDSketch.total_count()
+```
+
+Mobius leans on the flip side of this. It keeps **cumulative** bin counters and
+snapshots them over time. To get the distribution for any window it takes the
+counters at the end of the window and subtracts the counters from the start,
+`DDSketch.delta/2`, a bin-by-bin subtraction. No re-aggregation, no stored samples.
+This is exactly what the **Over time** graph does: it subtracts consecutive stored
+snapshots to recover each window's distribution.
+
+```elixir
+# Cumulative counts grew by [20, 30] during the window
+window_end = Enum.reduce([10, 20, 30], DDSketch.new(relative_accuracy: 0.05), &DDSketch.insert(&2, &1))
+window_start = Enum.reduce([10], DDSketch.new(relative_accuracy: 0.05), &DDSketch.insert(&2, &1))
+
+DDSketch.delta(window_end, window_start) |> DDSketch.total_count()
+```
+
+Being clock-invariant (bins are derived from values, not time) also means a device
+with a wrong clock cannot corrupt the structure, which matters on hardware that
+boots before its clock is set.
+
+## Turning histograms on for a real metric
+
+In Mobius, histograms are an option on a `summary` metric. Add
+`reporter_options: [histogram: ...]` to the metric definition:
+
+```elixir
+# In your metrics list, e.g. in application.ex
+[
+  Telemetry.Metrics.summary("http.request.duration",
+    unit: {:native, :millisecond},
+    reporter_options: [histogram: [relative_accuracy: 0.05]]
+  )
+]
+```
+
+`histogram: true` uses the defaults; a keyword list passes options straight to
+`Mobius.DDSketch.new/1`. From then on Mobius increments the right bin counter on
+every event, and you query windows through `Mobius.Exports` — which is exactly what
+the graphs at the top of this notebook do. On this device `NervesLivebook.Telemetry`
+configures the metric list shown in the setup cell.
+
+## Recap
+
+* Averages hide the tail; quantiles expose it.
+* DDSketch gives quantiles with a bounded relative error using memory that scales
+  with the spread of values, not the sample count.
+* Cumulative counters plus `delta/2` turn "the distribution over the last N minutes"
+  into cheap subtraction.
+* Enable it with `reporter_options: [histogram: ...]` on a `summary` metric and read
+  it back through `Mobius.Exports`.
