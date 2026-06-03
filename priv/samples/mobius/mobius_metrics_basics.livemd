@@ -59,8 +59,8 @@ ot_controls =
   Kino.Control.form(
     [
       metric: Kino.Input.select("Metric", Enum.map(metrics, fn {n, _, _} -> {n, n} end), default: "system.cpu.temperature.celsius"),
-      amount: Kino.Input.number("Last", default: 10),
-      unit: Kino.Input.select("Per", [second: "seconds", minute: "minutes", hour: "hours", day: "days"], default: :minute)
+      amount: Kino.Input.number("Last", default: 24),
+      unit: Kino.Input.select("Per", [second: "seconds", minute: "minutes", hour: "hours", day: "days"], default: :hour)
     ],
     submit: "Plot"
   )
@@ -69,14 +69,15 @@ ot_frame = Kino.Frame.new()
 
 render_over_time = fn %{metric: name, amount: amount, unit: unit} ->
   amount = trunc(amount || 1)
-  now = System.system_time(:second)
-  data = Mobius.Exports.metrics(name, types[name], %{}, last: {amount, unit}, mobius_instance: instance)
+
+  %{points: points, window: %{to: now}} =
+    Mobius.Charts.series(name, types[name], %{}, last: {amount, unit}, mobius_instance: instance)
 
   content =
-    if data == [] do
+    if points == [] do
       Kino.Markdown.new("_No data for #{name} in the last #{amount} #{unit}._")
     else
-      rows = Enum.map(data, fn %{timestamp: ts, value: value} -> %{"seconds_ago" => ts - now, "value" => value} end)
+      rows = Enum.map(points, fn %{timestamp: ts, value: value} -> %{"seconds_ago" => ts - now, "value" => value} end)
 
       VegaLite.new(width: 640, height: 300, title: "#{name} — last #{amount} #{unit}")
       |> VegaLite.data_from_values(rows)
@@ -88,7 +89,7 @@ render_over_time = fn %{metric: name, amount: amount, unit: unit} ->
   Kino.Frame.render(ot_frame, content)
 end
 
-render_over_time.(%{metric: "system.cpu.temperature.celsius", amount: 10, unit: :minute})
+render_over_time.(%{metric: "system.cpu.temperature.celsius", amount: 24, unit: :hour})
 Kino.listen(ot_controls, fn %{data: data} -> render_over_time.(data) end)
 
 Kino.Layout.grid([ot_controls, ot_frame], boxed: true)
@@ -108,19 +109,14 @@ lv_controls =
 lv_frame = Kino.Frame.new()
 
 render_latest = fn %{group: group} ->
+  # Mobius.Charts.latest/2 takes the {name, type} refs and returns the most recent
+  # value per metric, already dropping any with no data in the window.
   rows =
     metrics
     |> Enum.filter(fn {_, _, g} -> g == group end)
-    |> Enum.map(fn {name, type, _} ->
-      value =
-        case Mobius.Exports.metrics(name, type, %{}, last: {5, :minute}, mobius_instance: instance) do
-          [] -> nil
-          data -> List.last(data).value
-        end
-
-      %{"metric" => name, "value" => value}
-    end)
-    |> Enum.reject(&(&1["value"] == nil))
+    |> Enum.map(fn {name, type, _} -> {name, type} end)
+    |> Mobius.Charts.latest(last: {5, :minute}, mobius_instance: instance)
+    |> Enum.map(fn %{metric: name, value: value} -> %{"metric" => name, "value" => value} end)
 
   content =
     if rows == [] do

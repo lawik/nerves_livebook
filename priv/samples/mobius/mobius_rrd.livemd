@@ -1,29 +1,298 @@
 # Mobius' round-robin database
 
+## Watch the resolutions fill
+
+The RRD is **four ring buffers**, one per resolution. One snapshot per second, each landing in exactly one buffer. Each scrape carries one **global value** (the second it happened), stored in whichever buffer takes it — so the same value is the same colour in *every* ring. The **dark** slice is the newest (write head); the readout calls out oldest→latest. Spin the clock: **seconds** fills in ~2 min, **minutes** ticks each minute, **hours** / **days** only on bigger jumps.
+
+```elixir
+# Four resolutions, each a ring buffer: {key, label, capacity, period, coarser_period}
+# — the Mobius.RRD defaults; `coarser` is the period that "steals" this one's boundary.
+# Plain data, no module: Nerves Livebook shares one BEAM across notebooks.
+resolutions = [
+  {:second, "seconds", 120, 1, 60},
+  {:minute, "minutes", 120, 60, 3600},
+  {:hour, "hours", 48, 3600, 86_400},
+  {:day, "days", 60, 86_400, nil}
+]
+
+# Buttons that advance the simulated clock: {tag, label, seconds}.
+rrd_steps = [
+  {:s1, "+1s", 1},
+  {:s10, "+10s", 10},
+  {:m1, "+1m", 60},
+  {:m10, "+10m", 600},
+  {:h1, "+1h", 3600},
+  {:h10, "+10h", 36_000},
+  {:d1, "+1d", 86_400},
+  {:d10, "+10d", 864_000}
+]
+
+rrd_buttons = Enum.map(rrd_steps, fn {tag, label, _secs} -> {tag, Kino.Control.button(label)} end)
+rrd_reset = Kino.Control.button("Reset")
+rrd_status = Kino.Frame.new()
+
+# One global value per scrape: the second it happened. A scrape lands in exactly one
+# buffer (the coarsest boundary it crossed) and that buffer stores this global value —
+# so the same value has the same colour in every ring.
+#
+# `retained` gives the last `capacity` values a buffer holds: boundaries of `period`
+# that aren't also a coarser boundary, newest-first.
+retained = fn now, period, capacity, coarser ->
+  div(now, period)
+  |> Stream.unfold(fn
+    0 -> nil
+    k -> {period * k, k - 1}
+  end)
+  |> Stream.filter(fn t -> coarser == nil or rem(t, coarser) != 0 end)
+  |> Enum.take(capacity)
+end
+
+# Hue from a value. Cycle length 997 is coprime to 60/3600/86400, so even the coarse
+# rings (whose values jump by 3600/86400) get distinct hues instead of all-one-colour.
+hue = fn value -> trunc(rem(value, 997) * 360 / 997) end
+
+# A ring's slots. The k-th insert sits at slot rem(k-1, capacity); we map the last
+# `capacity` retained values onto their slots and colour by global value. Newest (the
+# write head) is drawn dark.
+ring_data = fn now, period, capacity, coarser ->
+  count = if coarser, do: div(now, period) - div(now, coarser), else: div(now, period)
+  newest_slot = if count > 0, do: rem(count - 1, capacity), else: nil
+
+  slot_value =
+    now
+    |> retained.(period, capacity, coarser)
+    |> Enum.with_index()
+    |> Map.new(fn {value, i} -> {rem(count - i - 1, capacity), value} end)
+
+  for slot <- 0..(capacity - 1) do
+    value = slot_value[slot]
+
+    color =
+      cond do
+        slot == newest_slot -> "#111827"
+        value != nil -> "hsl(#{hue.(value)}, 70%, 55%)"
+        true -> "#eef0f3"
+      end
+
+    %{"slot" => slot, "color" => color, "w" => 1}
+  end
+end
+
+# One small persistent donut per resolution. We push fresh data into each on every
+# click with window: capacity, an in-place update that never flickers.
+rrd_charts =
+  Map.new(resolutions, fn {key, label, capacity, _p, _c} ->
+    chart =
+      VegaLite.new(width: 260, height: 260, title: "#{label} (#{capacity})")
+      |> VegaLite.data(name: "ring")
+      |> VegaLite.mark(:arc, inner_radius: 60, stroke: "white", stroke_width: 1, tooltip: true)
+      |> VegaLite.encode_field(:theta, "w", type: :quantitative, stack: true)
+      |> VegaLite.encode_field(:order, "slot", type: :quantitative)
+      # scale: nil → the field values are used as literal CSS colours.
+      |> VegaLite.encode_field(:color, "color", type: :nominal, scale: nil, legend: nil)
+      |> Kino.VegaLite.new()
+
+    {key, chart}
+  end)
+
+fmt_elapsed = fn now ->
+  pad = fn n -> String.pad_leading(to_string(n), 2, "0") end
+  "#{div(now, 86_400)}d #{pad.(rem(div(now, 3600), 24))}:#{pad.(rem(div(now, 60), 60))}:#{pad.(rem(now, 60))}"
+end
+
+render_rrd = fn now ->
+  Enum.each(resolutions, fn {key, _label, capacity, period, coarser} ->
+    Kino.VegaLite.push_many(rrd_charts[key], ring_data.(now, period, capacity, coarser), dataset: "ring", window: capacity)
+  end)
+
+  # Callouts: oldest → latest global value held in each ring.
+  summary =
+    Enum.map_join(resolutions, " · ", fn {_key, label, capacity, period, coarser} ->
+      case retained.(now, period, capacity, coarser) do
+        [] -> "#{label} –"
+        vals -> "#{label} #{List.last(vals)}→#{List.first(vals)}"
+      end
+    end)
+
+  Kino.Frame.render(rrd_status, Kino.Markdown.new("**Simulated uptime: #{fmt_elapsed.(now)}** — #{summary}"))
+end
+
+render_rrd.(0)
+
+step_seconds = Map.new(rrd_steps, fn {tag, _label, secs} -> {tag, secs} end)
+
+Kino.listen(
+  Kino.Control.tagged_stream(rrd_buttons ++ [{:reset, rrd_reset}]),
+  0,
+  fn
+    {:reset, _event}, _now ->
+      render_rrd.(0)
+      {:cont, 0}
+
+    {tag, _event}, now ->
+      now = now + Map.fetch!(step_seconds, tag)
+      render_rrd.(now)
+      {:cont, now}
+  end
+)
+
+Kino.Layout.grid(
+  [
+    Kino.Layout.grid(Enum.map(rrd_buttons, fn {_tag, btn} -> btn end) ++ [rrd_reset], columns: 9),
+    rrd_status,
+    Kino.Layout.grid(Enum.map(resolutions, fn {key, _l, _c, _p, _co} -> rrd_charts[key] end), columns: 2)
+  ],
+  boxed: true
+)
+```
+
+## One scrape, one buffer
+
+Each scrape is stored **once**, in the coarsest buffer whose boundary it crossed. The window auto-zooms from 60 s up to 3 d as the run grows — watch each buffer settle into its own span: **seconds** ~2 min, **minutes** ~2 h, **hours** ~2 d, **days** beyond. Dense recent, sparse old, bounded.
+
+```elixir
+window_days = 3
+span = window_days * 86_400
+
+sample_steps = [
+  {:s10, "+10s", 10},
+  {:m1, "+1m", 60},
+  {:m10, "+10m", 600},
+  {:h1, "+1h", 3600},
+  {:h10, "+10h", 36_000},
+  {:d1, "+1d", 86_400}
+]
+
+sample_buttons = Enum.map(sample_steps, fn {tag, label, _s} -> {tag, Kino.Control.button(label)} end)
+sample_reset = Kino.Control.button("Reset")
+sample_status = Kino.Frame.new()
+
+# {lane, period, capacity, coarser_period}: the four buffers and the period that
+# "steals" their boundary (days has none).
+lanes = [
+  {"seconds", 1, 120, 60},
+  {"minutes", 60, 120, 3600},
+  {"hours", 3600, 48, 86_400},
+  {"days", 86_400, 60, nil}
+]
+
+lane_res = %{"seconds" => "second", "minutes" => "minute", "hours" => "hour", "days" => "day"}
+
+# The last `capacity` scrapes routed to a buffer: boundaries of `period` that aren't
+# also a coarser boundary. Lazy + descending, so it stops after `capacity`.
+retained = fn now, period, capacity, coarser ->
+  div(now, period)
+  |> Stream.unfold(fn
+    0 -> nil
+    k -> {period * k, k - 1}
+  end)
+  |> Stream.filter(fn t -> coarser == nil or rem(t, coarser) != 0 end)
+  |> Enum.take(capacity)
+end
+
+humanize = fn s ->
+  cond do
+    s >= 86_400 -> "#{Float.round(s / 86_400, 1)} d"
+    s >= 3600 -> "#{Float.round(s / 3600, 1)} h"
+    s >= 60 -> "#{Float.round(s / 60, 1)} min"
+    true -> "#{round(s)} s"
+  end
+end
+
+# Every retained scrape within the last `visible` seconds, placed by age in its lane.
+sample_points = fn now, visible ->
+  for {lane, period, capacity, coarser} <- lanes,
+      t <- retained.(now, period, capacity, coarser),
+      now - t <= visible do
+    %{"ago" => t - now, "lane" => lane, "res" => lane_res[lane]}
+  end
+end
+
+# No fixed x domain: VegaLite refits the axis to the data on each push, so the window
+# auto-zooms as the run grows. Labels hidden because the unit shifts from s to days.
+sample_chart =
+  VegaLite.new(width: 720, height: 170, title: "Retained scrapes — each stored in exactly one buffer")
+  |> VegaLite.data(name: "samples")
+  |> VegaLite.mark(:tick, thickness: 2, opacity: 0.85)
+  |> VegaLite.encode_field(:x, "ago", type: :quantitative, axis: [title: "← older          now →", labels: false, ticks: false])
+  |> VegaLite.encode_field(:y, "lane",
+    type: :nominal,
+    scale: [domain: ["seconds", "minutes", "hours", "days"]],
+    axis: [title: nil]
+  )
+  |> VegaLite.encode_field(:color, "res",
+    type: :nominal,
+    scale: [
+      domain: ["second", "minute", "hour", "day", "frame"],
+      range: ["#9ca3af", "#60a5fa", "#f59e0b", "#ef4444", "transparent"]
+    ],
+    legend: nil
+  )
+  |> Kino.VegaLite.new()
+
+# Visible window grows with the run: at least 60 s, at most `span` (3 d). Two invisible
+# "frame" anchors at the window edges pin the axis to that span even when empty.
+render_samples = fn now ->
+  visible = now |> max(60) |> min(span)
+
+  frame = [
+    %{"ago" => 0, "lane" => "seconds", "res" => "frame"},
+    %{"ago" => -visible, "lane" => "seconds", "res" => "frame"}
+  ]
+
+  Kino.VegaLite.clear(sample_chart, dataset: "samples")
+  Kino.VegaLite.push_many(sample_chart, frame ++ sample_points.(now, visible), dataset: "samples")
+
+  counts =
+    Enum.map_join(lanes, " · ", fn {lane, period, capacity, coarser} ->
+      n = retained.(now, period, capacity, coarser) |> Enum.count(fn t -> now - t <= visible end)
+      "#{lane} #{n}"
+    end)
+
+  Kino.Frame.render(sample_status, Kino.Markdown.new("**Uptime #{humanize.(now)}** · window #{humanize.(visible)} — #{counts}"))
+end
+
+render_samples.(0)
+
+sample_step_seconds = Map.new(sample_steps, fn {tag, _l, s} -> {tag, s} end)
+
+Kino.listen(
+  Kino.Control.tagged_stream(sample_buttons ++ [{:reset, sample_reset}]),
+  0,
+  fn
+    {:reset, _event}, _now ->
+      render_samples.(0)
+      {:cont, 0}
+
+    {tag, _event}, now ->
+      now = now + Map.fetch!(sample_step_seconds, tag)
+      render_samples.(now)
+      {:cont, now}
+  end
+)
+
+Kino.Layout.grid(
+  [
+    Kino.Layout.grid(Enum.map(sample_buttons, fn {_t, b} -> b end) ++ [sample_reset], columns: 7),
+    sample_status,
+    sample_chart
+  ],
+  boxed: true
+)
+```
+
 ## Introduction
 
-The companion notebook **How Mobius remembers: the CircularBuffer** covers a single
-fixed-size buffer. This one shows how Mobius combines four of them into a
-[round-robin database](https://en.wikipedia.org/wiki/RRDtool) (`Mobius.RRD`), the
-structure that holds the metric history you plot.
+`Mobius.RRD` is four `CircularBuffer`s at different resolutions — fine detail recent, coarse detail older, all in constant memory:
 
-The idea: you want fine detail for the recent past and coarser detail going further
-back, all in constant memory. Mobius does that with four `CircularBuffer`s at
-different time resolutions:
-
-| Resolution | Default capacity | Covers |
+| Resolution | Capacity | Covers |
 | --- | --- | --- |
-| `:second` | 120 | the last ~2 minutes, one point per second |
-| `:minute` | 120 | the last ~2 hours, one point per minute |
-| `:hour` | 48 | the last 2 days, one point per hour |
-| `:day` | 60 | the last ~2 months, one point per day |
+| `:second` | 120 | ~2 minutes |
+| `:minute` | 120 | ~2 hours |
+| `:hour` | 48 | 2 days |
+| `:day` | 60 | ~2 months |
 
-Every second the Mobius scraper takes one snapshot of the current metrics and
-inserts it. The RRD decides which resolution that snapshot belongs to.
-
-`Mobius.RRD` is an internal module (its struct is opaque), but building one by hand
-is the clearest way to see the rollup. Nothing here touches the live Mobius
-instance.
+Building one by hand below; nothing here touches the live instance.
 
 ## Build an empty RRD
 
@@ -33,12 +302,9 @@ alias Mobius.RRD
 rrd = RRD.new()
 ```
 
-A quick helper to see how full each resolution is. The RRD is a map whose
-`:second/:minute/:hour/:day` keys are `CircularBuffer`s, so we can count each one.
+Helper to count each resolution's buffer:
 
 ```elixir
-# A plain function bound to a variable, not a module: Nerves Livebook shares one BEAM
-# across notebooks, so a redefined module would clash on a second run.
 peek = fn rrd ->
   for resolution <- [:second, :minute, :hour, :day] do
     buffer = Map.fetch!(rrd, resolution)
@@ -57,9 +323,7 @@ peek.(rrd)
 
 ## Insert a run of snapshots
 
-Let's simulate the scraper: one snapshot per second for 130 seconds. We start on a
-day boundary so the resolution math is easy to follow. The payload is whatever the
-scraper would store; here a single fake metric record per snapshot.
+Simulate the scraper: one snapshot per second for 130 seconds, starting on a day boundary.
 
 ```elixir
 base = 86_400 * 20_000
@@ -74,41 +338,30 @@ rrd =
 peek.(rrd)
 ```
 
-Look at the counts:
-
-* `:second` filled to its capacity of 120 and is now evicting the oldest, exactly
-  the CircularBuffer behaviour from the previous notebook.
-* `:minute` collected a point each time the clock crossed a minute boundary.
-* `:day` holds a single point: the very first snapshot of the run.
-* `:hour` is empty because 130 seconds never crossed an hour boundary.
+Counts: `:second` capped at 120 and evicting, `:minute` one per minute boundary, `:day` one (the first snapshot), `:hour` empty (130 s never crossed an hour).
 
 ## How the routing works
 
-`RRD.insert/3` checks the timestamp against the next boundary for each resolution,
-coarsest first, and stores the snapshot in the first one that matches:
+`RRD.insert/3` checks boundaries coarsest-first and stores in the first match:
 
-* crossed a new **day**? store in `:day` (and reset the lower boundaries)
-* else crossed a new **hour**? store in `:hour`
-* else crossed a new **minute**? store in `:minute`
-* else a new **second**? store in `:second`
-* else it is a duplicate within the same second, drop it
+* new **day**? → `:day` (reset lower boundaries)
+* else new **hour**? → `:hour`
+* else new **minute**? → `:minute`
+* else new **second**? → `:second`
+* else duplicate within the second → drop
 
-So each snapshot lands in exactly one resolution. A point is promoted to a coarser
-buffer only as it ages past each boundary. That is what keeps recent history dense
-and old history sparse without ever growing the memory footprint.
+One resolution per snapshot. Recent dense, old sparse, memory flat.
 
 ## Reading history back
 
-`RRD.all/1` returns every stored snapshot across all four resolutions as
-`{timestamp, snapshot}` tuples, oldest (day) to newest (second).
+`RRD.all/1` returns every snapshot as `{timestamp, snapshot}`, oldest→newest.
 
 ```elixir
 all = RRD.all(rrd)
 %{total_points: length(all), oldest: List.first(all), newest: List.last(all)}
 ```
 
-`RRD.query/2` and `RRD.query/3` pull a time window, which is what
-`Mobius.Exports.plot/4` and friends use under the hood.
+`RRD.query/2,3` pull a time window — what `Mobius.Exports.plot/4` uses under the hood.
 
 ```elixir
 # Everything from 30 seconds into the run onward
@@ -117,14 +370,9 @@ RRD.query(rrd, base + 100) |> length()
 
 ## Putting it together
 
-A metric's life inside Mobius:
+1. Telemetry handler writes the value into ETS.
+2. Once a second the scraper snapshots ETS → `RRD.insert/3`.
+3. RRD files it into the right `CircularBuffer`, ageing and evicting.
+4. Plot/export reads back with `RRD.query/3`.
 
-1. A telemetry handler writes the current value into an ETS table (cheap, no copy).
-2. Once a second the scraper snapshots that table and calls `RRD.insert/3`.
-3. The RRD files the snapshot into the right `CircularBuffer`, ageing older points
-   into coarser resolutions and dropping anything past capacity.
-4. When you plot or export, Mobius reads the window back out with `RRD.query/3`.
-
-Four small fixed-size buffers, and you get two months of history on a device with no
-unbounded growth. Open **Mobius histograms with DDSketch** to see how Mobius keeps
-*distributions* (not just single values) under the same constant-memory constraint.
+Four fixed buffers → two months of history, no unbounded growth. Next: **Mobius histograms with DDSketch** for *distributions* under the same constraint.

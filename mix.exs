@@ -114,6 +114,7 @@ defmodule NervesLivebook.MixProject do
       {:req, "~> 0.5"},
       {:telemetry_metrics, "~> 1.0"},
       {:telemetry_poller, "~> 1.0"},
+      {:term_ui, "1.0.0-rc"},
       {:stb_image, "~> 0.6.0"},
       {:vega_lite, "~> 0.1"},
       {:vintage_net_wifi, "~> 0.12.5", targets: @all_targets},

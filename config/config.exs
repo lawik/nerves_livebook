@@ -36,34 +36,61 @@ config :livebook, :storage, Livebook.Storage.Ets
 # Livebook's learn section is built at compile-time
 config :livebook, :learn_notebooks, [
   %{
-    # Required notebook path
-    path: "#{File.cwd!()}/priv/welcome.livemd",
-    # Optional notebook identifier for URLs, as in /learn/notebooks/{slug}
-    # By default the slug is inferred from file name, so there is no need to set it
-    slug: "nerves",
-    # Optional list of images
-    # image_paths: [
-    #  # This image can be sourced as images/myimage.jpg in the notebook
-    #  "/path/to/myimage.jpg"
-    # ],
-    # Optional details for the notebook card. If omitted, the notebook
-    # is hidden in the UI, but still accessible under /learn/notebooks/{slug}
+    path: "#{File.cwd!()}/priv/samples/mobius/mobius_metrics_basics.livemd",
+    slug: "mobius-metrics",
     details: %{
       cover_path: "#{File.cwd!()}/assets/nerves.svg",
-      description: "Get to know how Livebook works with Nerves."
+      description: "Explore live device metrics with Mobius."
     }
   },
   %{
-    path: "#{File.cwd!()}/priv/samples/networking/configure_wifi.livemd",
-    slug: "wifi",
+    path: "#{File.cwd!()}/priv/samples/mobius/mobius_histograms.livemd",
+    slug: "mobius-histograms",
     details: %{
-      cover_path: "#{File.cwd!()}/assets/wifi-setup.svg",
-      description: "Connect Nerves Livebook to a wireless network."
+      cover_path: "#{File.cwd!()}/assets/nerves.svg",
+      description: "Distributions and percentiles with DDSketch."
     }
   },
-  %{path: "#{File.cwd!()}/priv/samples/basics/sys_class_leds.livemd", details: nil},
-  %{path: "#{File.cwd!()}/priv/samples/networking/firmware_update.livemd", details: nil},
-  %{path: "#{File.cwd!()}/priv/samples/networking/vintage_net.livemd", details: nil}
+  %{
+    path: "#{File.cwd!()}/priv/samples/mobius/circular_buffer_basics.livemd",
+    slug: "circular-buffer",
+    details: %{
+      cover_path: "#{File.cwd!()}/assets/nerves.svg",
+      description: "How Mobius remembers: the fixed-size CircularBuffer."
+    }
+  },
+  %{
+    path: "#{File.cwd!()}/priv/samples/mobius/mobius_rrd.livemd",
+    slug: "mobius-rrd",
+    details: %{
+      cover_path: "#{File.cwd!()}/assets/nerves.svg",
+      description: "Four ring buffers: constant-memory metric history."
+    }
+  },
+  %{
+    path: "#{File.cwd!()}/priv/samples/mobius/mobius_pretty_charts.livemd",
+    slug: "mobius-charts",
+    details: %{
+      cover_path: "#{File.cwd!()}/assets/nerves.svg",
+      description: "Mobius charts in the terminal with term_ui."
+    }
+  },
+  %{
+    path: "#{File.cwd!()}/priv/samples/mobius/mobius_process_tree.livemd",
+    slug: "mobius-process-tree",
+    details: %{
+      cover_path: "#{File.cwd!()}/assets/nerves.svg",
+      description: "Inside Mobius: the process tree."
+    }
+  },
+  %{
+    path: "#{File.cwd!()}/priv/samples/mobius/mobius_message_tracing.livemd",
+    slug: "mobius-message-tracing",
+    details: %{
+      cover_path: "#{File.cwd!()}/assets/nerves.svg",
+      description: "Watch Mobius work with live message tracing."
+    }
+  }
 ]
 
 # Enable the embedded runtime which isn't available by default

@@ -1,0 +1,142 @@
+# Mobius charts in the terminal
+
+The **Mobius metrics** and **Mobius histograms** notebooks draw with VegaLite — great
+when you have a browser. This one draws the same data as crisp **text** charts using
+[`term_ui`](https://hexdocs.pm/term_ui): Unicode braille line charts, block bar charts,
+sparklines and gauges. They render inline here and, because they are just ANSI strings,
+look identical over an SSH/IEx console on the device — somewhere VegaLite cannot reach.
+
+Two small pieces do the work:
+
+* `Mobius.Charts` turns a query into a chart-ready data structure (sorted histogram
+  bars, one line per quantile, latest values) — all the wrangling the other notebooks
+  do by hand.
+* `NervesLivebook.MobiusUI` takes those structures straight to a `term_ui` widget. No
+  glue in between — hand a `Mobius.Charts` result to the matching function and it draws.
+
+Every `MobiusUI` function also takes `as: :string` to return the raw ANSI string for
+`IO.puts/1`.
+
+```elixir
+alias NervesLivebook.MobiusUI
+
+instance =
+  Process.registered()
+  |> Enum.find_value(fn name ->
+    case Atom.to_string(name) do
+      "Elixir.Mobius.Scraper." <> instance -> String.to_atom(instance)
+      "Elixir.Mobius.Registry." <> instance -> String.to_atom(instance)
+      "Elixir.Mobius.ReportServer." <> instance -> String.to_atom(instance)
+      _ -> nil
+    end
+  end) || raise "No Mobius instance is running. Start one with {Mobius, metrics: [...]}."
+```
+
+## A metric over time
+
+`Mobius.Charts.series/4` hands back `%{metric:, points: [%{timestamp:, value:}], ...}`.
+`line/2` reads it directly and titles the chart with the metric name.
+
+```elixir
+"system.cpu.temperature.celsius"
+|> Mobius.Charts.series(:last_value, %{}, last: {5, :minute}, mobius_instance: instance)
+|> MobiusUI.line(title: "CPU temperature (°C) — last 5 min")
+```
+
+A sparkline is the same data in one line — handy inline next to a label.
+
+```elixir
+"system.cpu.temperature.celsius"
+|> Mobius.Charts.series(:last_value, %{}, last: {2, :minute}, mobius_instance: instance)
+|> MobiusUI.sparkline()
+```
+
+## Several series at once
+
+`Mobius.Charts.quantiles_over_time/4` returns one line per quantile. `line/2` draws each
+in its own color and adds a legend (`p50`, `p95`, `p99`).
+
+```elixir
+metric = "phoenix.endpoint.stop.duration"
+
+case Mobius.Charts.quantiles_over_time(metric, [0.5, 0.95, 0.99], %{},
+       last: {1, :hour},
+       mobius_instance: instance
+     ) do
+  {:ok, qot} ->
+    if Enum.all?(qot.lines, &(&1.points == [])) do
+      Kino.Markdown.new("_No stored histogram windows for #{metric} in the last hour yet._")
+    else
+      MobiusUI.line(qot, title: "#{metric} quantiles — last hour")
+    end
+
+  {:error, _} ->
+    Kino.Markdown.new("_#{metric} is not histogram-enabled._")
+end
+```
+
+## Latest values as bars
+
+`Mobius.Charts.latest/2` returns the most recent value for each metric. `bars/2` draws
+them as a colored horizontal bar chart.
+
+```elixir
+[
+  {"vm.memory.total", :last_value},
+  {"vm.memory.processes", :last_value},
+  {"vm.memory.binary", :last_value},
+  {"vm.memory.ets", :last_value}
+]
+|> Mobius.Charts.latest(last: {5, :minute}, mobius_instance: instance)
+|> MobiusUI.bars(title: "BEAM memory (bytes)")
+```
+
+## A distribution as a histogram
+
+`Mobius.Charts.distribution/3` returns the histogram's bins already sorted as
+`%{value:, count:}` bars — no DDSketch math at the call site. `histogram/2` draws them.
+
+```elixir
+case Mobius.Charts.distribution(metric, %{}, last: {1, :hour}, mobius_instance: instance) do
+  {:ok, %{total_count: 0}} ->
+    Kino.Markdown.new("_No observations for #{metric} in the last hour._")
+
+  {:ok, dist} ->
+    MobiusUI.histogram(dist, title: "#{metric} distribution")
+
+  {:error, _} ->
+    Kino.Markdown.new("_#{metric} is not histogram-enabled._")
+end
+```
+
+## A single value as a gauge
+
+```elixir
+cpu =
+  case Mobius.Charts.latest([{"system.cpu.utilization.percent", :last_value}],
+         last: {1, :minute},
+         mobius_instance: instance
+       ) do
+    [%{value: value} | _] -> value
+    [] -> 0
+  end
+
+MobiusUI.gauge(cpu,
+  min: 0,
+  max: 100,
+  label: "CPU utilization (%)",
+  zones: [{0, :green}, {60, :yellow}, {85, :red}]
+)
+```
+
+## Over the console
+
+Everything above is an ANSI string under the hood. Pass `as: :string` and `IO.puts/1` it
+and you get the same chart on a plain IEx session on the device:
+
+```elixir
+"system.cpu.temperature.celsius"
+|> Mobius.Charts.series(:last_value, %{}, last: {2, :minute}, mobius_instance: instance)
+|> MobiusUI.sparkline(as: :string)
+|> IO.puts()
+```

@@ -29,22 +29,6 @@ metrics = [
   "phoenix.live_view.mount.stop.duration",
   "phoenix.live_view.handle_event.stop.duration"
 ]
-
-# Project a sketch to sorted {value, count} bars. A plain function bound to a
-# variable, not a module: Nerves Livebook shares one BEAM across notebooks, so a
-# `defmodule` would fail to redefine on a second run. The representative value of a
-# bin is `2·γ^idx / (γ + 1)`, the same value `quantile/2` reports for it.
-bars = fn sketch ->
-  gamma = sketch.gamma
-
-  Mobius.DDSketch.bins(sketch)
-  |> Enum.map(fn
-    {{:hist, :zero}, count} -> {0.0, count}
-    {{:hist, :pos, idx}, count} -> {2.0 * :math.pow(gamma, idx) / (gamma + 1.0), count}
-    {{:hist, :neg, idx}, count} -> {-(2.0 * :math.pow(gamma, idx) / (gamma + 1.0)), count}
-  end)
-  |> Enum.sort()
-end
 ```
 
 ## Distribution
@@ -54,7 +38,7 @@ bins_controls =
   Kino.Control.form(
     [
       metric: Kino.Input.select("Metric", Enum.map(metrics, &{&1, &1}), default: "phoenix.endpoint.stop.duration"),
-      amount: Kino.Input.number("Last", default: 1),
+      amount: Kino.Input.number("Last", default: 24),
       unit: Kino.Input.select("Per", [second: "seconds", minute: "minutes", hour: "hours", day: "days"], default: :hour)
     ],
     submit: "Plot"
@@ -64,13 +48,13 @@ bins_frame = Kino.Frame.new()
 
 render_bins = fn %{metric: metric, amount: amount, unit: unit} ->
   amount = trunc(amount || 1)
-  {:ok, sketch} = Mobius.Exports.histogram(metric, %{}, last: {amount, unit}, mobius_instance: instance)
+  {:ok, dist} = Mobius.Charts.distribution(metric, %{}, last: {amount, unit}, mobius_instance: instance)
 
   content =
-    if Mobius.DDSketch.total_count(sketch) == 0 do
+    if dist.total_count == 0 do
       Kino.Markdown.new("_No observations for #{metric} in the last #{amount} #{unit}._")
     else
-      data = Enum.map(bars.(sketch), fn {value, count} -> %{"bin" => Float.round(value, 2), "count" => count} end)
+      data = Enum.map(dist.bins, fn %{value: value, count: count} -> %{"bin" => Float.round(value, 2), "count" => count} end)
 
       VegaLite.new(width: 640, height: 300, title: "#{metric} — last #{amount} #{unit}")
       |> VegaLite.data_from_values(data)
@@ -82,7 +66,7 @@ render_bins = fn %{metric: metric, amount: amount, unit: unit} ->
   Kino.Frame.render(bins_frame, content)
 end
 
-render_bins.(%{metric: "phoenix.endpoint.stop.duration", amount: 1, unit: :hour})
+render_bins.(%{metric: "phoenix.endpoint.stop.duration", amount: 24, unit: :hour})
 Kino.listen(bins_controls, fn %{data: data} -> render_bins.(data) end)
 
 Kino.Layout.grid([bins_controls, bins_frame], boxed: true)
@@ -101,12 +85,11 @@ quantile_fields = [
   {:p999, 0.999, "p99.9"}
 ]
 
-unit_seconds = %{second: 1, minute: 60, hour: 3600, day: 86_400}
-
 ts_metric = Kino.Input.select("Metric", Enum.map(metrics, &{&1, &1}), default: "phoenix.endpoint.stop.duration")
-ts_amount = Kino.Input.number("Last", default: 1)
+ts_amount = Kino.Input.number("Last", default: 24)
 ts_unit = Kino.Input.select("Per", [second: "seconds", minute: "minutes", hour: "hours", day: "days"], default: :hour)
 ts_checks = Enum.map(quantile_fields, fn {field, _q, label} -> {field, Kino.Input.checkbox(label, default: field in [:p50, :p95, :p99])} end)
+ts_avg = Kino.Input.checkbox("avg", default: true)
 ts_plot = Kino.Control.button("Plot")
 ts_frame = Kino.Frame.new()
 
@@ -115,46 +98,74 @@ render_ts = fn state ->
   amount = trunc(state.amount || 1)
   unit = state.unit
   metric = state.metric
-  now = System.system_time(:second)
-  cutoff = now - amount * unit_seconds[unit]
-
-  # Each consecutive pair of stored snapshots is a window — Mobius' own RRD cadence
-  # sets the resolution. Keep only snapshots inside the chosen period (and drop
-  # pre-clock-sync boot timestamps, which fall outside the 60-day horizon).
-  windows =
-    Mobius.Scraper.all_histograms(instance)
-    |> Enum.map(&elem(&1, 0))
-    |> Enum.uniq()
-    |> Enum.sort()
-    |> Enum.filter(fn ts -> ts >= cutoff and now - ts <= 60 * 86_400 end)
-    |> Enum.chunk_every(2, 1, :discard)
-
-  qs = Enum.map(selected, &elem(&1, 0))
+  show_avg = state[:avg]
 
   content =
-    cond do
-      selected == [] ->
-        Kino.Markdown.new("_Pick at least one quantile._")
+    if selected == [] and not show_avg do
+      Kino.Markdown.new("_Pick at least one series._")
+    else
+      # Mobius.Charts.quantiles_over_time/4 splits the window at Mobius' stored
+      # resolution and reconstructs each interval's distribution by subtracting
+      # consecutive cumulative sketches — one {timestamp, value} line per quantile.
+      labels = Map.new(selected)
+      qs = Enum.map(selected, &elem(&1, 0))
 
-      true ->
-        rows =
-          Enum.flat_map(windows, fn [from, to] ->
-            {:ok, qmap} = Mobius.Exports.quantiles(metric, qs, %{}, from: from, to: to, mobius_instance: instance)
-            for {q, label} <- selected, qmap[q] != nil do
-              %{"seconds_ago" => to - now, "value" => Float.round(qmap[q], 2), "quantile" => label}
-            end
-          end)
+      {:ok, %{window: %{to: now}, lines: lines}} =
+        Mobius.Charts.quantiles_over_time(metric, qs, %{}, last: {amount, unit}, mobius_instance: instance)
 
-        if rows == [] do
-          Kino.Markdown.new("_No stored history for #{metric} in the last #{amount} #{unit}._")
+      quantile_rows =
+        Enum.flat_map(lines, fn %{quantile: q, points: points} ->
+          for %{timestamp: ts, value: value} <- points do
+            %{"seconds_ago" => ts - now, "value" => Float.round(value, 2), "series" => labels[q]}
+          end
+        end)
+
+      # The :summary type returns %{average, std_dev} per stored point, so a single
+      # query gives both the average line and the ±1σ spread for the error band.
+      summary_points =
+        if show_avg do
+          Mobius.Charts.series(metric, :summary, %{}, last: {amount, unit}, mobius_instance: instance).points
         else
-          VegaLite.new(width: 640, height: 300, title: "#{metric} — quantiles over the last #{amount} #{unit}")
+          []
+        end
+
+      avg_rows =
+        for %{timestamp: ts, value: %{average: avg}} <- summary_points,
+            do: %{"seconds_ago" => ts - now, "value" => Float.round(avg, 2), "series" => "avg"}
+
+      band_rows =
+        for %{timestamp: ts, value: %{average: avg, std_dev: sd}} <- summary_points do
+          %{"seconds_ago" => ts - now, "lower" => Float.round(avg - sd, 2), "upper" => Float.round(avg + sd, 2)}
+        end
+
+      rows = quantile_rows ++ avg_rows
+      order = Enum.map(selected, &elem(&1, 1)) ++ List.wrap(if show_avg, do: "avg")
+
+      if rows == [] do
+        Kino.Markdown.new("_No stored history for #{metric} in the last #{amount} #{unit}._")
+      else
+        lines_layer =
+          VegaLite.new()
           |> VegaLite.data_from_values(rows)
           |> VegaLite.mark(:line, point: true, tooltip: true)
           |> VegaLite.encode_field(:x, "seconds_ago", type: :quantitative, axis: [title: "seconds (0 = now)"])
           |> VegaLite.encode_field(:y, "value", type: :quantitative, scale: [zero: false], axis: [title: metric])
-          |> VegaLite.encode_field(:color, "quantile", type: :nominal, sort: Enum.map(selected, &elem(&1, 1)))
-        end
+          |> VegaLite.encode_field(:color, "series", type: :nominal, sort: order)
+
+        # ±1 std_dev band around the average, drawn behind the lines.
+        band_layer =
+          VegaLite.new()
+          |> VegaLite.data_from_values(band_rows)
+          |> VegaLite.mark(:area, opacity: 0.15, color: "#888888", tooltip: true)
+          |> VegaLite.encode_field(:x, "seconds_ago", type: :quantitative)
+          |> VegaLite.encode_field(:y, "lower", type: :quantitative, scale: [zero: false])
+          |> VegaLite.encode_field(:y2, "upper")
+
+        layers = List.wrap(if band_rows != [], do: band_layer) ++ [lines_layer]
+
+        VegaLite.new(width: 640, height: 300, title: "#{metric} — over the last #{amount} #{unit}")
+        |> VegaLite.layers(layers)
+      end
     end
 
   Kino.Frame.render(ts_frame, content)
@@ -164,8 +175,9 @@ end
 # runs off-process, so we render from this state rather than reading inputs back.
 ts_initial = %{
   metric: "phoenix.endpoint.stop.duration",
-  amount: 1,
+  amount: 24,
   unit: :hour,
+  avg: true,
   p50: true,
   p90: false,
   p95: true,
@@ -176,7 +188,7 @@ ts_initial = %{
 render_ts.(ts_initial)
 
 Kino.listen(
-  Kino.Control.tagged_stream([{:metric, ts_metric}, {:amount, ts_amount}, {:unit, ts_unit}, {:plot, ts_plot}] ++ Enum.map(ts_checks, fn {field, input} -> {field, input} end)),
+  Kino.Control.tagged_stream([{:metric, ts_metric}, {:amount, ts_amount}, {:unit, ts_unit}, {:plot, ts_plot}, {:avg, ts_avg}] ++ Enum.map(ts_checks, fn {field, input} -> {field, input} end)),
   ts_initial,
   fn
     {:plot, _event}, state ->
@@ -193,7 +205,7 @@ Kino.listen(
 Kino.Layout.grid(
   [
     Kino.Layout.grid([ts_metric, ts_amount, ts_unit], columns: 3),
-    Kino.Layout.grid(Enum.map(ts_checks, fn {_field, input} -> input end), columns: 5),
+    Kino.Layout.grid(Enum.map(ts_checks, fn {_field, input} -> input end) ++ [ts_avg], columns: 6),
     ts_plot,
     ts_frame
   ],
