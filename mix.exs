@@ -146,7 +146,7 @@ defmodule NervesLivebook.MixProject do
       {:dialyxir, "~> 1.3", only: :dev, runtime: false},
       {:ex_doc, "~> 0.22", only: :docs, runtime: false},
       {:sbom, "~> 0.6", only: :dev, runtime: false},
-      {:mobius, github: "mobius-home/mobius", branch: "histograms"}
+      {:mobius, path: "/Users/larswikman/sprawl/mobius"}
     ]
   end
 
