@@ -281,6 +281,126 @@ Kino.Layout.grid(
 )
 ```
 
+## The real thing: live CPU at every resolution
+
+The same four rings, driven by the **real CPU metric** Mobius stores — pre-filled from the persisted history, refreshed every second, hue mapped 0–100 % (green → red). Press **Do math** to spin up RSA key pairs on every core and watch it redline.
+
+```elixir
+cpu_metric = "system.cpu.utilization.percent"
+
+cpu_rings = [
+  {:second, "seconds", 120, 1},
+  {:minute, "minutes", 120, 60},
+  {:hour, "hours", 48, 3600},
+  {:day, "days", 60, 86_400}
+]
+
+cpu_instance =
+  Process.registered()
+  |> Enum.find_value(:mobius, fn name ->
+    case Atom.to_string(name) do
+      "Elixir.Mobius.Scraper." <> i -> String.to_atom(i)
+      _ -> nil
+    end
+  end)
+
+# Inverted hue: 0 % → 120 (green), 100 % → 0 (red).
+cpu_hue = fn pct -> round(120 * (100 - max(0.0, min(100.0, pct))) / 100) end
+
+# One ring's slots from the pulled history, on a true time axis: one slot per
+# period bucket, the last slot being the newest stored point's bucket, walking back
+# one period per slot. Buckets with no stored data stay gray.
+cpu_ring_data = fn points, newest_ts, period, capacity ->
+  buckets =
+    points
+    |> Enum.group_by(fn %{timestamp: ts} -> div(ts, period) end, fn %{value: v} -> v end)
+    |> Map.new(fn {bucket, vals} -> {bucket, Enum.sum(vals) / length(vals)} end)
+
+  latest = div(newest_ts, period)
+
+  for slot <- 0..(capacity - 1) do
+    value = buckets[latest - (capacity - 1 - slot)]
+    color = if value, do: "hsl(#{cpu_hue.(value)}, 75%, 50%)", else: "#eef0f3"
+    %{"slot" => slot, "color" => color, "w" => 1}
+  end
+end
+
+cpu_status = Kino.Frame.new()
+cpu_math = Kino.Control.button("Do math")
+
+cpu_charts =
+  Map.new(cpu_rings, fn {key, label, capacity, _period} ->
+    chart =
+      VegaLite.new(width: 260, height: 260, title: "#{label} (#{capacity})")
+      |> VegaLite.data(name: "ring")
+      |> VegaLite.mark(:arc, inner_radius: 60, stroke: "white", stroke_width: 1, tooltip: true)
+      |> VegaLite.encode_field(:theta, "w", type: :quantitative, stack: true)
+      |> VegaLite.encode_field(:order, "slot", type: :quantitative)
+      |> VegaLite.encode_field(:color, "color", type: :nominal, scale: nil, legend: nil)
+      |> Kino.VegaLite.new()
+
+    {key, chart}
+  end)
+
+# Pull the whole stored history once per refresh; every ring is derived from it.
+refresh_cpu = fn ->
+  points =
+    cpu_metric
+    |> Mobius.Charts.series({:summary, :average}, %{}, last: {60, :day}, mobius_instance: cpu_instance)
+    |> Map.fetch!(:points)
+
+  newest = List.last(points)
+  newest_ts = (newest && newest.timestamp) || 0
+
+  Enum.each(cpu_rings, fn {key, _label, capacity, period} ->
+    Kino.VegaLite.push_many(cpu_charts[key], cpu_ring_data.(points, newest_ts, period, capacity), dataset: "ring", window: capacity)
+  end)
+
+  # The indicator shows the raw reported value (the last_value the poller emitted),
+  # not a windowed average from the history.
+  raw =
+    cpu_metric
+    |> Mobius.Charts.series(:last_value, %{}, last: {1, :minute}, mobius_instance: cpu_instance)
+    |> Map.fetch!(:points)
+    |> List.last()
+
+  now_pct = if raw, do: "#{Float.round(raw.value * 1.0, 1)} %", else: "—"
+  Kino.Frame.render(cpu_status, Kino.Markdown.new("**CPU now: #{now_pct}** — green 0 % → red 100 %"))
+end
+
+refresh_cpu.()
+
+# Refresh every second.
+Kino.listen(1000, fn _i -> refresh_cpu.() end)
+
+# Light up the cores: 10k tasks of ECC keypair generation across every scheduler.
+# Each task is ~5 ms (50 × P-256 keygen) — heavy enough to saturate, fine-grained
+# enough that the schedulers keep the sampling and UI running.
+Kino.listen(cpu_math, fn _event ->
+  cores = System.schedulers_online()
+
+  spawn(fn ->
+    1..10_000
+    |> Task.async_stream(
+      fn _ -> for _ <- 1..50, do: :public_key.generate_key({:namedCurve, :secp256r1}) end,
+      max_concurrency: cores,
+      ordered: false,
+      timeout: :infinity
+    )
+    |> Stream.run()
+  end)
+end)
+
+Kino.Layout.grid(
+  [
+    cpu_status,
+    cpu_math,
+    Kino.Layout.grid(Enum.map(cpu_rings, fn {key, _l, _c, _p} -> cpu_charts[key] end), columns: 2)
+  ],
+  boxed: true
+)
+```
+
 ## Introduction
 
 `Mobius.RRD` is four `CircularBuffer`s at different resolutions — fine detail recent, coarse detail older, all in constant memory:

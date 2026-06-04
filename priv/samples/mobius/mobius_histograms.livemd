@@ -37,7 +37,7 @@ metrics = [
 bins_controls =
   Kino.Control.form(
     [
-      metric: Kino.Input.select("Metric", Enum.map(metrics, &{&1, &1}), default: "phoenix.endpoint.stop.duration"),
+      metric: Kino.Input.select("Metric", Enum.map(metrics, &{&1, &1}), default: "system.cpu.utilization.percent"),
       amount: Kino.Input.number("Last", default: 24),
       unit: Kino.Input.select("Per", [second: "seconds", minute: "minutes", hour: "hours", day: "days"], default: :hour)
     ],
@@ -66,7 +66,7 @@ render_bins = fn %{metric: metric, amount: amount, unit: unit} ->
   Kino.Frame.render(bins_frame, content)
 end
 
-render_bins.(%{metric: "phoenix.endpoint.stop.duration", amount: 24, unit: :hour})
+render_bins.(%{metric: "system.cpu.utilization.percent", amount: 24, unit: :hour})
 Kino.listen(bins_controls, fn %{data: data} -> render_bins.(data) end)
 
 Kino.Layout.grid([bins_controls, bins_frame], boxed: true)
@@ -85,7 +85,7 @@ quantile_fields = [
   {:p999, 0.999, "p99.9"}
 ]
 
-ts_metric = Kino.Input.select("Metric", Enum.map(metrics, &{&1, &1}), default: "phoenix.endpoint.stop.duration")
+ts_metric = Kino.Input.select("Metric", Enum.map(metrics, &{&1, &1}), default: "system.cpu.utilization.percent")
 ts_amount = Kino.Input.number("Last", default: 24)
 ts_unit = Kino.Input.select("Per", [second: "seconds", minute: "minutes", hour: "hours", day: "days"], default: :hour)
 ts_checks = Enum.map(quantile_fields, fn {field, _q, label} -> {field, Kino.Input.checkbox(label, default: field in [:p50, :p95, :p99])} end)
@@ -174,7 +174,7 @@ end
 # Track every control's value in state (events carry the new value); the listener
 # runs off-process, so we render from this state rather than reading inputs back.
 ts_initial = %{
-  metric: "phoenix.endpoint.stop.duration",
+  metric: "system.cpu.utilization.percent",
   amount: 24,
   unit: :hour,
   avg: true,
