@@ -83,6 +83,9 @@ defmodule NervesLivebook.MixProject do
       {:livebook, "~> 0.19.3"},
       {:plug, "~> 1.12"},
       {:vintage_net, "~> 0.13"},
+      # Branch carries Whenwhere.FakeTimeClock (a nerves_time RTC that fetches real
+      # time over HTTP at boot); override the hex version nerves_hub_link pulls in.
+      {:whenwhere, github: "nervescloud/whenwhere", branch: "fake-time-clock", override: true},
 
       # Pull in commonly used libraries as a convenience to users.
       {:blue_heron, "~> 0.5", targets: @ble_targets},

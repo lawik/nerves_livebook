@@ -30,6 +30,11 @@ config :nerves, :erlinit, shutdown_report: "/data/last_shutdown.txt"
 # to the real one especially on RTC-less devices.
 config :nerves, :erlinit, update_clock: true
 
+# RTC-less devices: ask the whenwhere endpoint for the real time at boot (plain
+# HTTP, so it works before the clock is sane). Keeps timestamped data (e.g. the
+# persisted Mobius history) lining up across reboots instead of waiting for NTP.
+config :nerves_time, rtc: {Whenwhere.FakeTimeClock, []}
+
 # Configure the device for SSH IEx prompt access and firmware updates
 #
 # * See https://hexdocs.pm/nerves_ssh/readme.html for general SSH configuration
