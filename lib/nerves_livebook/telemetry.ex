@@ -53,7 +53,9 @@ defmodule NervesLivebook.Telemetry do
 
   import Telemetry.Metrics
 
-  @poller_period :timer.seconds(5)
+  # Match Mobius' 1 s scrape cadence: each CPU utilization sample then covers a
+  # 1-second window instead of a 5-second average repeated across scrapes.
+  @poller_period :timer.seconds(1)
 
   def start_link(arg) do
     Supervisor.start_link(__MODULE__, arg, name: __MODULE__)
