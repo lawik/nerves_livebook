@@ -54,6 +54,3 @@ config :livebook, LivebookWeb.Endpoint,
   server: true
 
 config :livebook, :iframe_port, 8081
-
-# Blink the LED to show that we're booting
-config :delux, initial: Delux.Effects.blink(:cyan, 2)

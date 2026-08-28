@@ -104,7 +104,6 @@ defmodule NervesLivebook.MixProject do
       {:circuits_i2c, "~> 2.0 or ~> 1.0"},
       {:circuits_spi, "~> 2.0 or ~> 1.0"},
       {:circuits_uart, "~> 1.3"},
-      {:delux, "~> 0.2"},
       {:hts221, "~> 1.1", targets: @all_targets},
       {:egd_text_panel, "~> 0.1.0", targets: @eink_targets},
       {:eink, "~> 0.1.0", targets: @eink_targets},

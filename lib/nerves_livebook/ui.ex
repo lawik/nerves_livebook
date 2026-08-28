@@ -1,12 +1,14 @@
 defmodule NervesLivebook.UI do
   @moduledoc """
-  Provide a simple UI using the device's built-in LEDs
+  Log connection status changes
 
-  Livebook, of course, is the main UI. This module handles one LED for now
-  since every supported device has one.
+  Livebook, of course, is the main UI. This module used to drive a status
+  LED via delux; on the reComputer R22xx branch delux is dropped, so it
+  just logs connection changes. The R22xx's RGB LED is available under
+  /sys/class/leds (led-red/led-green/led-blue) for notebooks to play with.
   """
   use GenServer
-  alias Delux.Effects
+  require Logger
 
   @doc """
   Start the UI GenServer
@@ -22,21 +24,14 @@ defmodule NervesLivebook.UI do
   @impl GenServer
   def init(_opts) do
     VintageNet.subscribe(["connection"])
-    value = VintageNet.get(["connection"])
-
-    Delux.render(led_program(value))
     {:ok, :no_state}
   end
 
   @impl GenServer
   def handle_info({VintageNet, ["connection"], _old, value, _meta}, state) do
-    Delux.render(led_program(value))
+    Logger.info("Connection status: #{inspect(value)}")
     {:noreply, state}
   end
 
   def handle_info(_, state), do: {:noreply, state}
-
-  defp led_program(:internet), do: Effects.on(:cyan)
-  defp led_program(:lan), do: Effects.on(:cyan)
-  defp led_program(_disconnected), do: Effects.blink(:cyan, 0.5)
 end

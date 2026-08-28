@@ -8,8 +8,6 @@ config :vintage_net,
     {"wlan0", %{type: VintageNetWiFi}}
   ]
 
-config :delux, indicators: %{default: %{green: "ACT"}}
-
 # The RPi5 supports WPA3 so this enables quick_configure to create WiFi
 # configurations that support both WPA2 and WPA3.
 config :vintage_net_wifi, :quick_configure, &VintageNetWiFi.Cookbook.generic/2
