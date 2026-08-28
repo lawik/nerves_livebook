@@ -24,7 +24,35 @@ config :vintage_net_wifi,
 # See mix.exs
 # config :nx, default_backend: NxEigen.Backend
 
-# Override the console port to use. The default is HDMI, but the RPi debug
-# console port is convenient too (ttyAMA10).
-# config :nerves, :erlinit,
-#    ctty: "ttyAMA10"
+# Put the IEx console on uart0 (GPIO14/15). On the reComputer R22xx that UART
+# is behind the CH343 bridge on the USB-C console port. The kernel already
+# logs there (console=serial0 in cmdline). Use "ttyAMA10" instead for the
+# CM5/RPi5 dedicated debug connector, or "tty1" for HDMI.
+config :nerves, :erlinit, ctty: "ttyAMA0"
+
+# --- bodge_hailo / HailoRT ---------------------------------------------------
+# The reComputer R22xx carries a Hailo-8 on M.2. nbpr_hailo8 ships HailoRT and
+# the PCIe driver into the rootfs; bodge_hailo's NIF compiles against the SDK
+# staged in NBPR's global artifact cache (populated by `mix nbpr.build` /
+# `nbpr.fetch` — the firmware alias runs nbpr.fetch first). At runtime
+# libhailort sits in /usr/lib, so the NIF needs no loader configuration.
+hailo_cache =
+  [System.user_home!(), ".local/share/nerves/nbpr", "nbpr_hailo8-*-nerves_system_rpi5-*"]
+  |> Path.join()
+  |> Path.wildcard()
+  |> Enum.filter(&File.dir?/1)
+  |> List.last()
+
+if is_nil(hailo_cache) do
+  Mix.raise("""
+  No nbpr_hailo8 artifact found in the NBPR cache. Build it before building
+  firmware (it can't be fetched mid-compile):
+
+      cd ../nbpr && MIX_TARGET=rpi5 mix nbpr.build NBPR.Hailo8
+  """)
+end
+
+config :bodge_hailo,
+  backend: :hailo8,
+  hailo8_include_dir: Path.join(hailo_cache, "staging/usr/include"),
+  hailo8_lib_dir: Path.join(hailo_cache, "staging/usr/lib")

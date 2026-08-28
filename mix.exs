@@ -38,6 +38,7 @@ defmodule NervesLivebook.MixProject do
       archives: [nerves_bootstrap: "~> 1.10 or ~> 2.0-dev"],
       start_permanent: Mix.env() == :prod,
       deps: deps(),
+      aliases: aliases(),
       releases: [{@app, release()}],
       dialyzer: dialyzer(),
       docs: docs()
@@ -93,6 +94,12 @@ defmodule NervesLivebook.MixProject do
       {:blue_heron, "~> 0.5", targets: @ble_targets},
       {:bmp280, "~> 0.2", targets: @all_targets},
       {:bodge_hailo, github: "lawik/bodge_hailo", targets: :rpi5},
+
+      # NBPR ships HailoRT (runtime + hailo_pci.ko + firmware) into the rootfs
+      # for the reComputer R22xx's Hailo-8. Path deps against the local
+      # checkout of lawik/nbpr (branch "hailo") for now.
+      {:nbpr, path: "../nbpr/nbpr", targets: :rpi5},
+      {:nbpr_hailo8, path: "../nbpr/packages/nbpr_hailo8", targets: :rpi5},
       {:circuits_gpio, "~> 2.0 or ~> 1.0"},
       {:circuits_i2c, "~> 2.0 or ~> 1.0"},
       {:circuits_spi, "~> 2.0 or ~> 1.0"},
@@ -167,6 +174,16 @@ defmodule NervesLivebook.MixProject do
       source_ref: "v#{@version}",
       source_url: @source_url
     ]
+  end
+
+  # `mix nbpr.fetch` stages the nbpr package binaries (and the HailoRT SDK
+  # bodge_hailo's NIF compiles against) before the firmware is assembled.
+  defp aliases do
+    if Mix.target() == :rpi5 do
+      [firmware: ["nbpr.fetch", "firmware"]]
+    else
+      []
+    end
   end
 
   def release do

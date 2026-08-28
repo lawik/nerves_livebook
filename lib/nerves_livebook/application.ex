@@ -103,6 +103,9 @@ defmodule NervesLivebook.Application do
     defp advertise_device(), do: :ok
   else
     defp target_children(:srhub), do: [NervesLivebook.WiFiMonitor]
+    # rpi5 here is the reComputer R22xx build: power button and the
+    # supercap-UPS power-loss line both arrive as KEY_POWER input events.
+    defp target_children(:rpi5), do: [NervesLivebook.PowerKeyMonitor]
     defp target_children(_), do: []
 
     defp advertise_device() do
