@@ -4,7 +4,15 @@ config :nerves,
   application_sort: [
     init:
       if(System.get_env("NERVES_IEX_FIRST"),
-        do: [:boot_preload, :logger_backends, :nerves_runtime, :iex, :toolshed, :nerves_pack],
+        do: [
+          :boot_preload,
+          :logger_backends,
+          :nerves_runtime,
+          :nerves_time,
+          :iex,
+          :toolshed,
+          :nerves_pack
+        ],
         else: [:boot_preload, :logger_backends, :nerves_runtime, :nerves_pack, :iex, :toolshed]
       )
   ]
@@ -13,7 +21,8 @@ config :nerves,
 config :boot_preload,
   modules_file: "/etc/boot_modules.txt",
   mode: String.to_atom(System.get_env("NERVES_PRELOAD", "off")),
-  rest_delay_ms: String.to_integer(System.get_env("NERVES_REST_DELAY_MS", "0"))
+  rest_delay_ms: String.to_integer(System.get_env("NERVES_REST_DELAY_MS", "0")),
+  wait_for_shell_ms: String.to_integer(System.get_env("NERVES_WAIT_FOR_SHELL_MS", "0"))
 
 # Enable the system startup guard to check that all OTP applications
 # started. If they didn't and you're on a Nerves system that supports

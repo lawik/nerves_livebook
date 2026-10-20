@@ -54,14 +54,92 @@ defmodule BootPreload do
     end
   end
 
+  @doc "Called from iex.exs once the shell is up; releases the deferred app starts."
+  def shell_ready() do
+    case :erlang.whereis(:boot_preload_rest) do
+      :undefined -> :ok
+      pid -> send(pid, :shell_ready)
+    end
+
+    :ok
+  end
+
+  @doc """
+  Profiling aid: log every process spawn (with MFA) and registration with
+  timestamps via erlang:display/1 until trace_stop/0. Works before the
+  kernel application is started.
+  """
+  def trace_procs() do
+    t0 = :erlang.monotonic_time(:millisecond)
+
+    tracer =
+      spawn(fn ->
+        :erlang.register(:boot_preload_tracer, self())
+        trace_loop(t0)
+      end)
+
+    :erlang.trace(:new_processes, true, [:procs, :monotonic_timestamp, {:tracer, tracer}])
+    :ok
+  end
+
+  def trace_stop() do
+    :erlang.trace(:new_processes, false, [:procs])
+    :erlang.trace(:processes, false, [:procs])
+    :ok
+  end
+
+  defp trace_loop(t0) do
+    receive do
+      {:trace_ts, pid, :spawn, pid2, mfa, ts} ->
+        :erlang.display({:spawn, ms(ts), pid, pid2, short_mfa(mfa)})
+        trace_loop(t0)
+
+      {:trace_ts, pid, :register, name, ts} ->
+        :erlang.display({:register, ms(ts), pid, name})
+        trace_loop(t0)
+
+      _ ->
+        trace_loop(t0)
+    end
+  end
+
+  # Boot script path variables: $ROOT is the OTP root, $RELEASE_LIB the release lib dir
+  defp expand_boot_var(dir) do
+    release_lib = :filename.dirname(:code.lib_dir(:boot_preload))
+
+    dir
+    |> to_string()
+    |> String.replace("$RELEASE_LIB", to_string(release_lib))
+    |> String.replace("$ROOT", to_string(:code.root_dir()))
+    |> to_charlist()
+  end
+
+  defp ms(ts), do: :erlang.convert_time_unit(ts, :native, :millisecond)
+  defp short_mfa({m, f, args}) when is_list(args), do: {m, f, length(args)}
+  defp short_mfa(other), do: other
+
   @doc """
   Start the remaining applications from a background process so that the boot
   script finishes (and the IEx shell starts) before they are up. Injected into
   the boot script by the release step in mix.exs (NERVES_EARLY_IEX=1).
   """
-  def start_rest(apps) do
+  def start_rest(apps, extra \\ []) do
     _ =
       spawn(fn ->
+        # Deferred code path entries and application specs (NERVES_DEFER_LOAD)
+        case extra[:paths] do
+          nil -> :ok
+          dirs -> :ok = :code.add_pathsz(:lists.map(&expand_boot_var/1, dirs), :cache)
+        end
+
+        for spec <- extra[:specs] || [] do
+          case :application.load(spec) do
+            :ok -> :ok
+            {:error, {:already_loaded, _}} -> :ok
+            {:error, reason} -> :erlang.display({:boot_preload_load_failed, spec, reason})
+          end
+        end
+
         # Record which modules were needed up to this point (tier 1) so the
         # preload list can be split; the rest can load behind the prompt.
         _ = :file.write_file("/data/boot_modules_tier1.txt", tier1_list())
@@ -71,6 +149,22 @@ defmodule BootPreload do
         case :application.get_env(:boot_preload, :rest_delay_ms) do
           {:ok, ms} when is_integer(ms) and ms > 0 -> :timer.sleep(ms)
           _ -> :ok
+        end
+
+        # Give the shell the CPU first: wait for shell_ready/0 (called from the
+        # end of iex.exs) or a timeout, so a headless boot still proceeds.
+        case :application.get_env(:boot_preload, :wait_for_shell_ms) do
+          {:ok, ms} when is_integer(ms) and ms > 0 ->
+            :erlang.register(:boot_preload_rest, self())
+
+            receive do
+              :shell_ready -> :ok
+            after
+              ms -> :ok
+            end
+
+          _ ->
+            :ok
         end
 
         case :file.read_file("/etc/boot_modules_tier2.txt") do

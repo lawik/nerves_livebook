@@ -199,7 +199,9 @@ defmodule NervesLivebook.MixProject do
   defp init_release(release) do
     release = Nerves.init_release(release)
 
-    if System.get_env("NERVES_PRELOAD") in ["early", "prim"] or System.get_env("NERVES_EARLY_IEX") do
+    if System.get_env("NERVES_PRELOAD") in ["early", "prim"] or
+         System.get_env("NERVES_EARLY_IEX") != nil or
+         System.get_env("NERVES_TRACE_PROCS") != nil do
       steps =
         Enum.flat_map(release.steps, fn
           :assemble -> [:assemble, &inject_boot_tweaks/1]
@@ -221,6 +223,7 @@ defmodule NervesLivebook.MixProject do
       |> maybe_inject_early_preload()
       |> maybe_inject_prim_preload(release)
       |> maybe_inject_early_iex()
+      |> maybe_inject_proc_trace()
 
     File.write!(boot_path, :erlang.term_to_binary({:script, id, instructions}))
     release
@@ -235,6 +238,52 @@ defmodule NervesLivebook.MixProject do
       Enum.flat_map(instructions, fn
         {:apply, {Config.Provider, :boot, []}} = i -> [preload, i]
         i -> [i]
+      end)
+    else
+      instructions
+    end
+  end
+
+  # Make BootPreload available before the kernel application (and the code
+  # server) exist, by primLoading it from the release's ebin like kernel/stdlib.
+  defp prim_load_boot_preload(instructions) do
+    # Only look before {kernel_load_completed}: every app's modules appear in a
+    # later primLoad too, but init skips those in interactive mode.
+    pre_kernel = Enum.take_while(instructions, &(&1 != {:kernel_load_completed}))
+
+    if Enum.any?(pre_kernel, &match?({:primLoad, [BootPreload]}, &1)) do
+      instructions
+    else
+      # The release's boot_preload ebin path string, as used in the big {path, ...}
+      {:path, all_paths} = Enum.find(instructions, &match?({:path, [_, _, _ | _]}, &1))
+      bp_path = Enum.find(all_paths, &(to_string(&1) =~ "boot_preload-"))
+      {:path, kernel_paths} = Enum.find(instructions, &match?({:path, [_, _]}, &1))
+
+      Enum.flat_map(instructions, fn
+        {:kernel_load_completed} = i ->
+          [{:path, kernel_paths ++ [bp_path]}, {:primLoad, [BootPreload]}, i]
+
+        i ->
+          [i]
+      end)
+    end
+  end
+
+  # NERVES_TRACE_PROCS=1 (profiling): log process spawns and registrations from
+  # the end of kernel code loading until Config.Provider runs.
+  defp maybe_inject_proc_trace(instructions) do
+    if System.get_env("NERVES_TRACE_PROCS") do
+      instructions
+      |> prim_load_boot_preload()
+      |> Enum.flat_map(fn
+        {:kernel_load_completed} = i ->
+          [i, {:apply, {BootPreload, :trace_procs, []}}]
+
+        {:apply, {Config.Provider, :boot, []}} = i ->
+          [{:apply, {BootPreload, :trace_stop, []}}, i]
+
+        i ->
+          [i]
       end)
     else
       instructions
@@ -271,16 +320,9 @@ defmodule NervesLivebook.MixProject do
       File.write!("rootfs_overlay/etc/boot_modules.prim", :erlang.term_to_binary(entries))
       Mix.shell().info("Prim preload: #{length(entries)} of #{length(mods)} modules resolved")
 
-      # The release's boot_preload ebin path string, as used in the big {path, ...}
-      {:path, all_paths} = Enum.find(instructions, &match?({:path, [_, _, _ | _]}, &1))
-      bp_path = Enum.find(all_paths, &(to_string(&1) =~ "boot_preload-"))
-      {:path, kernel_paths} = Enum.find(instructions, &match?({:path, [_, _]}, &1))
-
       instructions
+      |> prim_load_boot_preload()
       |> Enum.flat_map(fn
-        {:kernel_load_completed} = i ->
-          [{:path, kernel_paths ++ [bp_path]}, {:primLoad, [BootPreload]}, i]
-
         {:kernelProcess, :heart, _} = i ->
           [{:apply, {BootPreload, :prim, [~c"/etc/boot_modules.prim"]}}, i]
 
@@ -327,9 +369,57 @@ defmodule NervesLivebook.MixProject do
 
       # keep {progress, started} last
       {progress, others} = Enum.split_with(others, &match?({:progress, :started}, &1))
-      before ++ others ++ [{:apply, {BootPreload, :start_rest, [apps]}}] ++ progress
+      {before, others, extra} = maybe_defer_load(before, others, apps)
+      before ++ others ++ [{:apply, {BootPreload, :start_rest, [apps, extra]}}] ++ progress
     else
       instructions
+    end
+  end
+
+  # NERVES_DEFER_LOAD=1: also move the deferred applications' code path entries
+  # and `application:load` of their specs behind the shell. Their config from
+  # runtime.exs survives because Config.Provider sets env persistently.
+  defp maybe_defer_load(before, others, apps) do
+    if System.get_env("NERVES_DEFER_LOAD") do
+      deferred = MapSet.new(apps, fn {app, _} -> app end)
+
+      dir_app = fn dir ->
+        dir |> to_string() |> Path.dirname() |> Path.basename() |> String.split("-") |> hd()
+      end
+
+      deferred_dir? = fn dir ->
+        String.contains?(to_string(dir), "/ebin") and
+          MapSet.member?(deferred, String.to_atom(dir_app.(dir)))
+      end
+
+      {before, dirs} =
+        Enum.map_reduce(before, [], fn
+          {:path, [_, _, _ | _] = all}, acc ->
+            {keep, moved} = Enum.split_with(all, &(not deferred_dir?.(&1)))
+            {{:path, keep}, acc ++ moved}
+
+          i, acc ->
+            {i, acc}
+        end)
+
+      {loads, before} =
+        Enum.split_with(before, fn
+          {:apply, {:application, :load, [{:application, app, _}]}} ->
+            MapSet.member?(deferred, app)
+
+          _ ->
+            false
+        end)
+
+      specs = for {:apply, {:application, :load, [spec]}} <- loads, do: spec
+
+      Mix.shell().info(
+        "Deferring #{length(dirs)} code path entries and #{length(specs)} application loads"
+      )
+
+      {before, others, [paths: dirs, specs: specs]}
+    else
+      {before, others, []}
     end
   end
 
