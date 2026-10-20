@@ -30,7 +30,11 @@ defmodule NervesLivebook.MixProject do
   def project do
     [
       app: @app,
-      compilers: Enum.flat_map(Mix.compilers(), fn :app -> [:mix_shim, :app]; c -> [c] end),
+      compilers:
+        Enum.flat_map(Mix.compilers(), fn
+          :app -> [:mix_shim, :app]
+          c -> [c]
+        end),
       description: "Develop on embedded devices with Livebook and Nerves",
       author: "https://github.com/nerves-livebook/nerves_livebook/graphs/contributors",
       version: @version,
@@ -174,14 +178,55 @@ defmodule NervesLivebook.MixProject do
       # have the release load them.  These libraries are specified as `runtime:
       # false` above, but the release will contain them since they're marked to
       # be loaded below.
-      applications: [
-        mndp: :load
-      ],
+      applications:
+        [mndp: :load] ++
+          if(System.get_env("NERVES_BOOT_PROFILE"),
+            do: [tools: :load],
+            else: []
+          ),
       overwrite: true,
       include_erts: &Nerves.erts/0,
-      steps: [&Nerves.init_release/1, :assemble],
+      steps: [&init_release/1, :assemble],
       strip_beams: if(System.get_env("NERVES_STRIP_DOCS"), do: true, else: [keep: ["Docs"]])
     ]
+  end
+
+  # Boot-time module preloading experiment: with NERVES_PRELOAD=early, insert a
+  # boot script instruction right before Config.Provider runs so that the
+  # modules needed during boot are loaded in parallel before anything needs
+  # them. This has to run after :assemble (which generates start.boot) and
+  # before Nerves builds the root filesystem.
+  defp init_release(release) do
+    release = Nerves.init_release(release)
+
+    if System.get_env("NERVES_PRELOAD") == "early" do
+      steps =
+        Enum.flat_map(release.steps, fn
+          :assemble -> [:assemble, &inject_early_preload/1]
+          step -> [step]
+        end)
+
+      %{release | steps: steps}
+    else
+      release
+    end
+  end
+
+  defp inject_early_preload(release) do
+    boot_path = Path.join(release.version_path, "start.boot")
+    {:script, id, instructions} = File.read!(boot_path) |> :erlang.binary_to_term()
+
+    preload = {:apply, {BootPreload, :early, [~c"/etc/boot_modules.txt"]}}
+
+    instructions =
+      Enum.flat_map(instructions, fn
+        {:apply, {Config.Provider, :boot, []}} = i -> [preload, i]
+        i -> [i]
+      end)
+
+    File.write!(boot_path, :erlang.term_to_binary({:script, id, instructions}))
+    Mix.shell().info("Injected early module preload into #{boot_path}")
+    release
   end
 
   defp dialyzer() do
@@ -238,4 +283,3 @@ defmodule Mix.Tasks.Compile.MixShim do
     :ok
   end
 end
-

@@ -19,11 +19,39 @@ defmodule BootPreload do
 
     case mode do
       :off -> :ok
+      # handled from the boot script, see `early/1`
+      :early -> :ok
       :sync -> preload(file)
       :async -> _ = spawn(fn -> preload(file) end)
     end
 
     Supervisor.start_link([], strategy: :one_for_one, name: BootPreload.Supervisor)
+  end
+
+  @doc """
+  Preload from the boot script, before `Config.Provider` runs and before any
+  application is started. Only kernel/stdlib code may be relied on here, so
+  this avoids Elixir's standard library on purpose.
+
+  The boot script instruction is injected by the release step in mix.exs:
+
+      {apply, {'Elixir.BootPreload', early, ["/etc/boot_modules.txt"]}}
+  """
+  def early(file) do
+    case :file.read_file(file) do
+      {:ok, bin} ->
+        mods =
+          :lists.map(
+            &:erlang.binary_to_atom(&1, :utf8),
+            :binary.split(bin, "\n", [:global, :trim_all])
+          )
+
+        _ = :code.ensure_modules_loaded(mods)
+        :ok
+
+      _ ->
+        :ok
+    end
   end
 
   defp preload(file) do
