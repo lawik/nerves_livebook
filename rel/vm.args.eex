@@ -1,4 +1,6 @@
 ## Add custom options here
+<%= if System.get_env("NERVES_BOOT_PROFILE"), do: "-init_debug", else: "" %>
+<%= System.get_env("NERVES_VM_EXTRA_ARGS", "") %>
 
 ## Distributed Erlang Options
 ##  The cookie needs to be configured prior to vm boot for

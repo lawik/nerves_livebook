@@ -1,6 +1,12 @@
 import Config
 
-config :nerves, application_sort: [init: [:logger_backends, :nerves_runtime, :nerves_pack]]
+config :nerves,
+  application_sort: [init: [:boot_preload, :logger_backends, :nerves_runtime, :nerves_pack]]
+
+# Boot-time module preloading experiment (NERVES_PRELOAD=sync|async|off)
+config :boot_preload,
+  modules_file: "/etc/boot_modules.txt",
+  mode: String.to_atom(System.get_env("NERVES_PRELOAD", "off"))
 
 # Enable the system startup guard to check that all OTP applications
 # started. If they didn't and you're on a Nerves system that supports
@@ -81,6 +87,18 @@ config :vintage_net,
 
 config :nerves_motd,
   logo: File.read!(Path.expand("livebook-logo.txt", __DIR__))
+
+# Boot profiling instrumentation (set NERVES_BOOT_PROFILE=1 when building)
+if System.get_env("NERVES_BOOT_PROFILE") do
+  config :nerves, :erlinit, verbose: true, print_timing: true
+end
+
+# Root filesystem compression experiment (NERVES_SQUASHFS_COMP=gzip|zstd|lz4|xz)
+if comp = System.get_env("NERVES_SQUASHFS_COMP") do
+  config :nerves, :firmware,
+    rootfs_type:
+      {:squashfs, ["-comp", comp, "-mkfs-time", "0", "-all-time", "0", "-no-xattrs", "-quiet"]}
+end
 
 # Import target specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.

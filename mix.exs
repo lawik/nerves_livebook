@@ -148,6 +148,9 @@ defmodule NervesLivebook.MixProject do
       {:nerves_system_mangopi_mq_pro, "~> 0.15", runtime: false, targets: :mangopi_mq_pro},
       {:nerves_system_qemu_aarch64, "~> 0.5", runtime: false, targets: :qemu_aarch64},
 
+      # Boot-time module preloading experiment
+      {:boot_preload, path: "boot_preload"},
+
       # Compile-time only
       {:credo, "~> 1.6", only: :dev, runtime: false},
       {:dialyxir, "~> 1.3", only: :dev, runtime: false},
@@ -177,7 +180,7 @@ defmodule NervesLivebook.MixProject do
       overwrite: true,
       include_erts: &Nerves.erts/0,
       steps: [&Nerves.init_release/1, :assemble],
-      strip_beams: [keep: ["Docs"]]
+      strip_beams: if(System.get_env("NERVES_STRIP_DOCS"), do: true, else: [keep: ["Docs"]])
     ]
   end
 
