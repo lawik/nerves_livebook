@@ -54,6 +54,34 @@ defmodule BootPreload do
     end
   end
 
+  @doc """
+  Start the remaining applications from a background process so that the boot
+  script finishes (and the IEx shell starts) before they are up. Injected into
+  the boot script by the release step in mix.exs (NERVES_EARLY_IEX=1).
+  """
+  def start_rest(apps) do
+    _ =
+      spawn(fn ->
+        start = :erlang.monotonic_time(:millisecond)
+
+        :lists.foreach(
+          fn {app, type} ->
+            case :application.start_boot(app, type) do
+              :ok -> :ok
+              {:error, {:already_started, _}} -> :ok
+              {:error, reason} -> :erlang.display({:boot_preload, :start_failed, app, reason})
+            end
+          end,
+          apps
+        )
+
+        ms = :erlang.monotonic_time(:millisecond) - start
+        :io.format(:user, "boot_preload: rest started (~p apps) in ~p ms~n", [length(apps), ms])
+      end)
+
+    :ok
+  end
+
   defp preload(file) do
     {time, result} =
       :timer.tc(fn ->

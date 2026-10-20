@@ -199,10 +199,10 @@ defmodule NervesLivebook.MixProject do
   defp init_release(release) do
     release = Nerves.init_release(release)
 
-    if System.get_env("NERVES_PRELOAD") == "early" do
+    if System.get_env("NERVES_PRELOAD") == "early" or System.get_env("NERVES_EARLY_IEX") do
       steps =
         Enum.flat_map(release.steps, fn
-          :assemble -> [:assemble, &inject_early_preload/1]
+          :assemble -> [:assemble, &inject_boot_tweaks/1]
           step -> [step]
         end)
 
@@ -212,21 +212,64 @@ defmodule NervesLivebook.MixProject do
     end
   end
 
-  defp inject_early_preload(release) do
+  defp inject_boot_tweaks(release) do
     boot_path = Path.join(release.version_path, "start.boot")
     {:script, id, instructions} = File.read!(boot_path) |> :erlang.binary_to_term()
 
-    preload = {:apply, {BootPreload, :early, [~c"/etc/boot_modules.txt"]}}
-
     instructions =
+      instructions
+      |> maybe_inject_early_preload()
+      |> maybe_inject_early_iex()
+
+    File.write!(boot_path, :erlang.term_to_binary({:script, id, instructions}))
+    release
+  end
+
+  # Load the boot module set in parallel before Config.Provider runs.
+  defp maybe_inject_early_preload(instructions) do
+    if System.get_env("NERVES_PRELOAD") == "early" do
+      preload = {:apply, {BootPreload, :early, [~c"/etc/boot_modules.txt"]}}
+      Mix.shell().info("Injecting early module preload into start.boot")
+
       Enum.flat_map(instructions, fn
         {:apply, {Config.Provider, :boot, []}} = i -> [preload, i]
         i -> [i]
       end)
+    else
+      instructions
+    end
+  end
 
-    File.write!(boot_path, :erlang.term_to_binary({:script, id, instructions}))
-    Mix.shell().info("Injected early module preload into #{boot_path}")
-    release
+  # Start everything after the last "essential" application from a background
+  # process. The boot script then completes, init reports started, and the
+  # IEx shell (which waits for that) comes up while the rest start.
+  @early_iex_boundary :toolshed
+
+  defp maybe_inject_early_iex(instructions) do
+    if System.get_env("NERVES_EARLY_IEX") do
+      boundary =
+        Enum.find_index(
+          instructions,
+          &match?({:apply, {:application, :start_boot, [@early_iex_boundary, _]}}, &1)
+        )
+
+      boundary || Mix.raise("Could not find #{@early_iex_boundary} in start.boot")
+      {before, after_boundary} = Enum.split(instructions, boundary + 1)
+
+      {rest_starts, others} =
+        Enum.split_with(after_boundary, &match?({:apply, {:application, :start_boot, _}}, &1))
+
+      apps =
+        for {:apply, {:application, :start_boot, [app, type]}} <- rest_starts, do: {app, type}
+
+      Mix.shell().info("Deferring #{length(apps)} application starts past the IEx shell")
+
+      # keep {progress, started} last
+      {progress, others} = Enum.split_with(others, &match?({:progress, :started}, &1))
+      before ++ others ++ [{:apply, {BootPreload, :start_rest, [apps]}}] ++ progress
+    else
+      instructions
+    end
   end
 
   defp dialyzer() do

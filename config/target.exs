@@ -1,7 +1,9 @@
 import Config
 
 config :nerves,
-  application_sort: [init: [:boot_preload, :logger_backends, :nerves_runtime, :nerves_pack]]
+  application_sort: [
+    init: [:boot_preload, :logger_backends, :nerves_runtime, :nerves_pack, :iex, :toolshed]
+  ]
 
 # Boot-time module preloading experiment (NERVES_PRELOAD=sync|async|off)
 config :boot_preload,
