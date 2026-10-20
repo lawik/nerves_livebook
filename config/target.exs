@@ -17,7 +17,11 @@ config :nerves,
       )
   ]
 
-# Boot-time module preloading experiment (NERVES_PRELOAD=sync|async|off)
+# Boot-time module preloading experiment (NERVES_PRELOAD=sync|async|off).
+# Fastest measured combination (see boot-bench/RESULTS.md round 2):
+#   NERVES_IEX_FIRST=1 NERVES_EARLY_IEX=iex NERVES_PRELOAD=early NERVES_PRELOAD_TIER1=1 \
+#   NERVES_WAIT_FOR_SHELL_MS=10000 mix firmware
+# The tier lists in rootfs_overlay/etc were captured with that ordering.
 config :boot_preload,
   modules_file: "/etc/boot_modules.txt",
   mode: String.to_atom(System.get_env("NERVES_PRELOAD", "off")),
