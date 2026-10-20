@@ -8,7 +8,7 @@ defmodule NervesLivebook.MixProject do
   @source_url "https://github.com/nerves-livebook/nerves_livebook"
 
   @rpi_targets [:rpi, :rpi0, :rpi2, :rpi3, :rpi3a, :rpi4, :rpi0_2, :rpi5]
-  @all_targets @rpi_targets ++ [:bbb, :trellis, :x86_64, :mangopi_mq_pro]
+  @all_targets @rpi_targets ++ [:bbb, :trellis, :x86_64, :mangopi_mq_pro, :qemu_aarch64]
 
   # See the BlueHeron repository for the boards that it supports.
   @ble_targets [:rpi0, :rpi0_2, :rpi3, :rpi3a]
@@ -145,6 +145,7 @@ defmodule NervesLivebook.MixProject do
       {:nerves_system_trellis, "~> 0.4", runtime: false, targets: :trellis},
       {:nerves_system_x86_64, "~> 1.33", runtime: false, targets: :x86_64},
       {:nerves_system_mangopi_mq_pro, "~> 0.15", runtime: false, targets: :mangopi_mq_pro},
+      {:nerves_system_qemu_aarch64, "~> 0.5", runtime: false, targets: :qemu_aarch64},
 
       # Compile-time only
       {:credo, "~> 1.6", only: :dev, runtime: false},
@@ -186,3 +187,4 @@ defmodule NervesLivebook.MixProject do
     ]
   end
 end
+
