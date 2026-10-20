@@ -30,6 +30,7 @@ defmodule NervesLivebook.MixProject do
   def project do
     [
       app: @app,
+      compilers: Enum.flat_map(Mix.compilers(), fn :app -> [:mix_shim, :app]; c -> [c] end),
       description: "Develop on embedded devices with Livebook and Nerves",
       author: "https://github.com/nerves-livebook/nerves_livebook/graphs/contributors",
       version: @version,
@@ -185,6 +186,53 @@ defmodule NervesLivebook.MixProject do
       flags: [:missing_return, :extra_return, :unmatched_returns, :error_handling, :underspecs],
       ignore_warnings: ".dialyzer_ignore.exs"
     ]
+  end
+end
+
+defmodule Mix.Tasks.Compile.MixShim do
+  @moduledoc """
+  Compile `lib_shim/mix.ex` into `Elixir.Mix.beam` in the nerves_livebook ebin.
+
+  The shim provides `Mix.install/2` on the device. It has to be compiled in a
+  separate OS process since the real Mix is loaded while compiling the
+  project. Compiling it ahead of time means that the Elixir and Erlang
+  compilers don't need to be loaded at boot just to define this module.
+  """
+  use Mix.Task.Compiler
+
+  @shortdoc "Compile the on-device Mix shim"
+
+  @impl Mix.Task.Compiler
+  def run(_args) do
+    if Mix.target() == :host do
+      {:noop, []}
+    else
+      src = Path.expand("lib_shim/mix.ex")
+      out = Path.join(Mix.Project.compile_path(), "Elixir.Mix.beam")
+
+      if Mix.Utils.stale?([src, __ENV__.file], [out]) do
+        script = """
+        Code.put_compiler_option(:ignore_module_conflict, true)
+        [{Mix, bin}] = Code.compile_string(File.read!(#{inspect(src)}), #{inspect(src)})
+        File.write!(#{inspect(out)}, bin)
+        """
+
+        File.mkdir_p!(Path.dirname(out))
+
+        case System.cmd("elixir", ["-e", script], stderr_to_stdout: true) do
+          {_, 0} -> {:ok, []}
+          {output, code} -> Mix.raise("Compiling the Mix shim failed (#{code}):\n#{output}")
+        end
+      else
+        {:noop, []}
+      end
+    end
+  end
+
+  @impl Mix.Task.Compiler
+  def clean() do
+    File.rm(Path.join(Mix.Project.compile_path(), "Elixir.Mix.beam"))
+    :ok
   end
 end
 

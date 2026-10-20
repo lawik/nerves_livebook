@@ -10,7 +10,6 @@ defmodule NervesLivebook.Application do
 
     advertise_device()
     setup_wifi()
-    add_mix_install()
 
     # See https://elixir.hexdocs.pm/Supervisor.html
     # for other strategies and supported options
@@ -75,28 +74,8 @@ defmodule NervesLivebook.Application do
     defp empty?(_), do: false
   end
 
-  if Mix.env() != :test do
-    defp add_mix_install() do
-      # This needs to be done this way since redefining Mix at compile time
-      # doesn't make anyone happy.
-      _ =
-        Code.eval_string("""
-        defmodule Mix do
-          def install(deps, opts \\\\ []) when is_list(deps) and is_list(opts) do
-            NervesLivebook.MixInstall.install(deps, opts)
-          end
-
-          def install_project_dir() do
-            NervesLivebook.MixInstall.install_project_dir()
-          end
-        end
-        """)
-
-      :ok
-    end
-  else
-    defp add_mix_install(), do: :ok
-  end
+  # `Mix.install/2` is provided by the precompiled shim in `lib_shim/mix.ex`
+  # (see `Mix.Tasks.Compile.MixShim` in mix.exs). It's loaded on demand.
 
   if Mix.target() == :host do
     defp target_children(_), do: []
