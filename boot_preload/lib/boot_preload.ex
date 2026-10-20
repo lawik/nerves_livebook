@@ -36,7 +36,7 @@ defmodule BootPreload do
         |> :code.ensure_modules_loaded()
       end)
 
-    Logger.info("boot_preload: #{inspect(result)} in #{div(time, 1000)} ms")
+    Logger.warning("boot_preload: #{inspect(result)} in #{div(time, 1000)} ms")
     :ok
   end
 end
