@@ -199,7 +199,7 @@ defmodule NervesLivebook.MixProject do
   defp init_release(release) do
     release = Nerves.init_release(release)
 
-    if System.get_env("NERVES_PRELOAD") == "early" or System.get_env("NERVES_EARLY_IEX") do
+    if System.get_env("NERVES_PRELOAD") in ["early", "prim"] or System.get_env("NERVES_EARLY_IEX") do
       steps =
         Enum.flat_map(release.steps, fn
           :assemble -> [:assemble, &inject_boot_tweaks/1]
@@ -219,6 +219,7 @@ defmodule NervesLivebook.MixProject do
     instructions =
       instructions
       |> maybe_inject_early_preload()
+      |> maybe_inject_prim_preload(release)
       |> maybe_inject_early_iex()
 
     File.write!(boot_path, :erlang.term_to_binary({:script, id, instructions}))
@@ -228,12 +229,63 @@ defmodule NervesLivebook.MixProject do
   # Load the boot module set in parallel before Config.Provider runs.
   defp maybe_inject_early_preload(instructions) do
     if System.get_env("NERVES_PRELOAD") == "early" do
-      preload = {:apply, {BootPreload, :early, [~c"/etc/boot_modules.txt"]}}
+      preload = {:apply, {BootPreload, :early, [~c"/etc/#{module_list_file()}"]}}
       Mix.shell().info("Injecting early module preload into start.boot")
 
       Enum.flat_map(instructions, fn
         {:apply, {Config.Provider, :boot, []}} = i -> [preload, i]
         i -> [i]
+      end)
+    else
+      instructions
+    end
+  end
+
+  # NERVES_PRELOAD_TIER1=1 preloads only the modules needed up to the IEx
+  # prompt; the rest are loaded by BootPreload.start_rest/1 behind it.
+  defp module_list_file() do
+    if System.get_env("NERVES_PRELOAD_TIER1"),
+      do: "boot_modules_tier1.txt",
+      else: "boot_modules.txt"
+  end
+
+  # Preload before the kernel application starts. Generates
+  # /etc/boot_modules.prim ([{Mod, "lib/app-vsn/ebin/Mod.beam"}]) from the
+  # module list, loads BootPreload itself with primLoad while that still
+  # works, and applies BootPreload.prim/1 right after the full code path is set.
+  defp maybe_inject_prim_preload(instructions, release) do
+    if System.get_env("NERVES_PRELOAD") == "prim" do
+      mods =
+        File.read!("rootfs_overlay/etc/#{module_list_file()}")
+        |> String.split("\n", trim: true)
+        |> Enum.map(&String.to_atom/1)
+
+      beams =
+        Path.wildcard(Path.join(release.path, "lib/*/ebin/*.beam"))
+        |> Map.new(fn p ->
+          {Path.basename(p, ".beam") |> String.to_atom(), Path.relative_to(p, release.path)}
+        end)
+
+      entries = for m <- mods, rel = beams[m], rel != nil, do: {m, String.to_charlist(rel)}
+      # generated into the rootfs overlay (gitignored)
+      File.write!("rootfs_overlay/etc/boot_modules.prim", :erlang.term_to_binary(entries))
+      Mix.shell().info("Prim preload: #{length(entries)} of #{length(mods)} modules resolved")
+
+      # The release's boot_preload ebin path string, as used in the big {path, ...}
+      {:path, all_paths} = Enum.find(instructions, &match?({:path, [_, _, _ | _]}, &1))
+      bp_path = Enum.find(all_paths, &(to_string(&1) =~ "boot_preload-"))
+      {:path, kernel_paths} = Enum.find(instructions, &match?({:path, [_, _]}, &1))
+
+      instructions
+      |> Enum.flat_map(fn
+        {:kernel_load_completed} = i ->
+          [{:path, kernel_paths ++ [bp_path]}, {:primLoad, [BootPreload]}, i]
+
+        {:kernelProcess, :heart, _} = i ->
+          [{:apply, {BootPreload, :prim, [~c"/etc/boot_modules.prim"]}}, i]
+
+        i ->
+          [i]
       end)
     else
       instructions

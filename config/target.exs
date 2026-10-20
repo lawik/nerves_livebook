@@ -8,7 +8,8 @@ config :nerves,
 # Boot-time module preloading experiment (NERVES_PRELOAD=sync|async|off)
 config :boot_preload,
   modules_file: "/etc/boot_modules.txt",
-  mode: String.to_atom(System.get_env("NERVES_PRELOAD", "off"))
+  mode: String.to_atom(System.get_env("NERVES_PRELOAD", "off")),
+  rest_delay_ms: String.to_integer(System.get_env("NERVES_REST_DELAY_MS", "0"))
 
 # Enable the system startup guard to check that all OTP applications
 # started. If they didn't and you're on a Nerves system that supports
