@@ -120,8 +120,10 @@ defmodule BootPreload do
   """
   def prim(file) do
     {:ok, [[root]]} = :init.get_argument(:root)
-    # file_server is not running yet, so go through the prim loader
-    {:ok, bin, _} = :erl_prim_loader.get_file(file)
+    # file_server is not running yet, so go through the prim loader. read_file/1
+    # runs in the caller for the efile loader; get_file/1 would serialize every
+    # read through the erl_prim_loader process.
+    {:ok, bin} = :erl_prim_loader.read_file(file)
 
     entries =
       :lists.filter(fn {m, _} -> not :erlang.module_loaded(m) end, :erlang.binary_to_term(bin))
@@ -141,8 +143,8 @@ defmodule BootPreload do
           prepared =
             :lists.filtermap(
               fn {m, rel} ->
-                case :erl_prim_loader.get_file(root ++ ~c"/" ++ rel) do
-                  {:ok, beam, _} ->
+                case :erl_prim_loader.read_file(root ++ ~c"/" ++ rel) do
+                  {:ok, beam} ->
                     case :erlang.prepare_loading(m, beam) do
                       {:error, _} ->
                         false

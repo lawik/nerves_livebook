@@ -2,7 +2,11 @@ import Config
 
 config :nerves,
   application_sort: [
-    init: [:boot_preload, :logger_backends, :nerves_runtime, :nerves_pack, :iex, :toolshed]
+    init:
+      if(System.get_env("NERVES_IEX_FIRST"),
+        do: [:boot_preload, :logger_backends, :nerves_runtime, :iex, :toolshed, :nerves_pack],
+        else: [:boot_preload, :logger_backends, :nerves_runtime, :nerves_pack, :iex, :toolshed]
+      )
   ]
 
 # Boot-time module preloading experiment (NERVES_PRELOAD=sync|async|off)

@@ -295,17 +295,26 @@ defmodule NervesLivebook.MixProject do
   # Start everything after the last "essential" application from a background
   # process. The boot script then completes, init reports started, and the
   # IEx shell (which waits for that) comes up while the rest start.
-  @early_iex_boundary :toolshed
+  # NERVES_EARLY_IEX=1 defers everything after :toolshed; NERVES_EARLY_IEX=<app>
+  # uses that application as the boundary instead.
+  defp early_iex_boundary() do
+    case System.get_env("NERVES_EARLY_IEX") do
+      "1" -> :toolshed
+      app -> String.to_atom(app)
+    end
+  end
 
   defp maybe_inject_early_iex(instructions) do
     if System.get_env("NERVES_EARLY_IEX") do
+      boundary_app = early_iex_boundary()
+
       boundary =
         Enum.find_index(
           instructions,
-          &match?({:apply, {:application, :start_boot, [@early_iex_boundary, _]}}, &1)
+          &match?({:apply, {:application, :start_boot, [^boundary_app, _]}}, &1)
         )
 
-      boundary || Mix.raise("Could not find #{@early_iex_boundary} in start.boot")
+      boundary || Mix.raise("Could not find #{early_iex_boundary()} in start.boot")
       {before, after_boundary} = Enum.split(instructions, boundary + 1)
 
       {rest_starts, others} =
